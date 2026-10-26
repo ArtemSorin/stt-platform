@@ -1,0 +1,59 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: analytics-service
+
+interview:
+  # Микросервис распознавания речи (Vosk, а также Whisper для второго прохода)
+  stt-url: ${STT_URL:http://127.0.0.1:8081}
+  stt-flush-timeout-ms: 1500
+  whisper-enabled: ${WHISPER_ENABLED:true}
+  whisper-wait-ms: 25000
+
+  # Сколько тишины считать концом ответа, мс. Главный рычаг задержки решения.
+  end-silence-ms: 450          # «мягкий» конец: распознавание дожимается (flush) и готовится решение
+  next-extra-ms: 150           # ответ достаточный → следующий вопрос: ≈ 0,6 с
+  other-next-extra-ms: 600     # «не знаю», нет ответа, не по теме → следующий вопрос: ≈ 1,05 с
+  follow-up-extra-ms: 1500     # ответ неполный → уточняющий вопрос: ≈ 2 с (человек чаще всего думает)
+  grace-ms: 1000               # окно отмены: после решения микрофон ещё открыт
+  max-follow-ups: 2
+  no-speech-timeout-ms: 15000
+  weak-coverage: 0.08
+
+  # Excel-отчёт по окончании интервью
+  reports-dir: ${REPORTS_DIR:./reports}
+  report-download: true        # в отчёте есть эталонные ответы! false — не отдавать файл по HTTP
+  # Подмена банка вопросов / словаря внешними файлами (иначе — встроенные из resources/interview):
+  # questions-path: ./analytics-service/demo/questions-six.tsv
+  # glossary-path: D:/data/glossary.txt
+
+  # ---- Смысловая оценка ответов моделью FRIDA-Decisions (judge/frida_server.py) ----
+  # Модель решает «ответ достаточен или нужно уточнение» по тому, какие мысли эталона кандидат реально сообщил,
+  # и ставит оценки по критериям. Недоступна или не успела — работают прежние правила на ключевых словах.
+  judge:
+    enabled: ${JUDGE_ENABLED:true}
+    url: ${JUDGE_URL:http://127.0.0.1:9100}
+    protocol: sidecar              # sidecar — наш frida_server.py; vllm — сервер vLLM (POST /pooling)
+    decision-deadline-ms: 1200     # сколько ждать заключение после конца ответа, потом — правила
+    request-timeout-ms: 4000
+    score-timeout-ms: 30000        # фоновая оценка для отчёта
+    max-state-chars: 1800          # окно модели 512 токенов; ответ стоит раньше эталона, режется эталон
+    preview-enabled: true          # подсказка на экране тоже по смыслу (пропускается, если модель занята)
+    breaker-failures: 3            # столько сбоев подряд — и модель на 15 с выключается
+    breaker-pause-ms: 15000
+    # Пороги решений. Стартовые значения нужно калибровать: GET /api/judge/selfcheck
+    sufficient-shift: 0.10         # «достаточно» = порог уровня вопроса (0,40…0,55) + сдвиг
+    ignorance-p: 0.6
+    ignorance-max-coverage: 0.25
+    off-topic-p: 0.6
+    off-topic-max-coverage: 0.20
+    stagnation-delta: 0.05
+    process:                       # автозапуск сервера модели вместе с сервисом
+      autostart: ${JUDGE_AUTOSTART:false}
+      python: ${JUDGE_PYTHON:python}
+      script: judge/frida_server.py
+      backend: ${JUDGE_BACKEND:torch}   # torch | onnx | heuristic (заглушка БЕЗ модели, для проверки портов)
+      model: ${JUDGE_MODEL:ai-forever/FRIDA-Decisions}
+      device: ${JUDGE_DEVICE:}          # cuda | cpu; пусто — автоматически

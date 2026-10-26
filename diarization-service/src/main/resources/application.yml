@@ -1,0 +1,18 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: diarization-service
+
+diarization:
+  # Каталог с моделями Nemotron/CAM++ на Windows (как в исходном демо)
+  nemo-lib: ${NEMOTRON_HOME:C:/Users/Public/NemotronTest}/runtime/bin/nemo_speech_asr_c.dll
+  nemo-model: ${NEMOTRON_HOME:C:/Users/Public/NemotronTest}/model.gguf
+  speaker-model: ${NEMOTRON_HOME:C:/Users/Public/NemotronTest}/speaker_embedding_model.onnx
+  output-dir: ${DIARIZATION_OUTPUT:./runs/diarization}
+  preset: v3-streaming
+  num-threads: 4
+  queue-chunks: 32       # блоков по 160 мс
+  threshold: 0.60        # порог сходства голосов CAM++
+  settle-seconds: 0.64

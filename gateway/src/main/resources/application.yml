@@ -1,0 +1,16 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: gateway
+  web:
+    resources:
+      cache:
+        period: 0          # страница и скрипты всегда свежие (как в исходном демо)
+
+gateway:
+  diarization-url: ${DIARIZATION_URL:http://127.0.0.1:8082}
+  stt-url: ${STT_URL:http://127.0.0.1:8081}
+  analytics-url: ${ANALYTICS_URL:http://127.0.0.1:8083}
+  output-dir: ${GATEWAY_OUTPUT:./runs/gateway}   # stt-events.jsonl, timeline.json, integration-summary.json

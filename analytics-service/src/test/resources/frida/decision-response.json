@@ -1,0 +1,87 @@
+{
+ "model": "FRIDA-Decisions",
+ "answers": {
+  "f0": {
+   "type": "noul",
+   "noul": 0.9820137900379085
+  },
+  "f1": {
+   "type": "noul",
+   "noul": 0.04742587317756679
+  },
+  "f2": {
+   "type": "noul",
+   "noul": 0.7310585786300049
+  },
+  "ignorance": {
+   "type": "noul",
+   "noul": 0.006692850924284856
+  },
+  "offtopic": {
+   "type": "noul",
+   "noul": 0.0024726231566347748
+  },
+  "follow": {
+   "type": "ranking",
+   "ranking": [
+    "u1",
+    "u0",
+    "u3",
+    "u2",
+    "u4"
+   ],
+   "scores": {
+    "u0": 0.5,
+    "u1": 3.0,
+    "u2": -1.0,
+    "u3": 0.0,
+    "u4": -2.0
+   },
+   "probabilities": {
+    "u0": 0.07095097115323672,
+    "u1": 0.8643597775803525,
+    "u2": 0.015831301556108332,
+    "u3": 0.04303393934082469,
+    "u4": 0.0058240103694777185
+   },
+   "confidence": 0.6615646447836996
+  }
+ },
+ "margins": {
+  "f0": {
+   "true": 2.0,
+   "false": -2.0
+  },
+  "f1": {
+   "true": -1.5,
+   "false": 1.5
+  },
+  "f2": {
+   "true": 0.5,
+   "false": -0.5
+  },
+  "ignorance": {
+   "true": -2.5,
+   "false": 2.5
+  },
+  "offtopic": {
+   "true": -3.0,
+   "false": 3.0
+  },
+  "follow": {
+   "u0": 0.5,
+   "u1": 3.0,
+   "u2": -1.0,
+   "u3": 0.0,
+   "u4": -2.0
+  }
+ },
+ "usage": {
+  "state_tokens": 412,
+  "state_truncated": false,
+  "questions": 6,
+  "candidates": 15,
+  "backend": "torch",
+  "milliseconds": 41.7
+ }
+}

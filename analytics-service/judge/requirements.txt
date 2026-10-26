@@ -1,0 +1,5 @@
+# Выберите ОДИН бэкенд.
+# GPU или CPU через PyTorch (точный; на GPU — десятки миллисекунд на запрос):
+frida-decisions[torch] @ git+https://github.com/ai-forever/FRIDA-Decisions@main
+# Быстрее на CPU, без torch (int8 ONNX, ~1,2 ГБ; в README модели: 120 из 122 решений совпали с torch):
+# frida-decisions[onnx] @ git+https://github.com/ai-forever/FRIDA-Decisions@main

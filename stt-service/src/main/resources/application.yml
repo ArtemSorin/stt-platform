@@ -1,0 +1,25 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: stt-service
+
+vosk:
+  # Папка с распакованной моделью (внутри am/, conf/, graph/, ivector/ ...). Скачать: download-model.ps1 / .sh
+  # Для быстрого отклика можно взять vosk-model-small-ru-0.22 (~45 МБ)
+  model-path: ${VOSK_MODEL_PATH:./models/vosk-model-ru-0.42}
+  sample-rate: 16000
+
+whisper:
+  # Адрес Python-сервера Whisper (whisper/whisper_server.py). Пусто — второй проход выключен.
+  url: ${WHISPER_URL:http://127.0.0.1:9000}
+  # true — stt-service сам запустит whisper_server.py и остановит его при выходе
+  autostart: ${WHISPER_AUTOSTART:false}
+  python: ${WHISPER_PYTHON:python}
+  script: ${WHISPER_SCRIPT:whisper/whisper_server.py}
+  model: ${WHISPER_MODEL:small}
+  device: ${WHISPER_DEVICE:cpu}
+  compute-type: ${WHISPER_COMPUTE_TYPE:int8}
+  cpu-threads: 2
+  startup-timeout-seconds: 600

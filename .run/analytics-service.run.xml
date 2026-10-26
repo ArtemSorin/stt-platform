@@ -1,0 +1,10 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="analytics-service" type="SpringBootApplicationConfigurationType" factoryName="Spring Boot">
+    <module name="analytics-service" />
+    <option name="SPRING_BOOT_MAIN_CLASS" value="ru.sttplatform.analytics.AnalyticsServiceApplication" />
+    <option name="VM_PARAMETERS" value="-Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8 -Xmx512m" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>

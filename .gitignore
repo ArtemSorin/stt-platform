@@ -1,0 +1,8 @@
+target/
+.idea/
+*.iml
+models/
+runs/
+reports/
+__pycache__/
+.venv/
