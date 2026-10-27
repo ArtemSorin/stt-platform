@@ -6,7 +6,7 @@ import java.util.List;
  * Потоковый распознаватель речи для одного интервью. В платформе это клиент микросервиса
  * {@code stt-service} (Vosk), в тестах — заглушка со сценарием.
  *
- * @version 2.0.0
+ * @version 1.0.0
  */
 public interface SpeechEngine extends AutoCloseable {
 
@@ -15,6 +15,7 @@ public interface SpeechEngine extends AutoCloseable {
      *
      * @param isFinal {@code true} — фраза зафиксирована распознавателем; {@code false} — промежуточная гипотеза
      * @param text распознанный текст
+     * @version 1.0.0
      */
     record Result(boolean isFinal, String text) {}
 

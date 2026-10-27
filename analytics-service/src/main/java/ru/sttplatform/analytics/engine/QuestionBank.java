@@ -3,7 +3,9 @@ package ru.sttplatform.analytics.engine;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Читает questions.tsv (см. tools/xlsx_to_tsv.py). */
+/** Читает questions.tsv (см. tools/xlsx_to_tsv.py).
+ * @version 1.0.0
+ */
 public final class QuestionBank {
     private QuestionBank() {}
 

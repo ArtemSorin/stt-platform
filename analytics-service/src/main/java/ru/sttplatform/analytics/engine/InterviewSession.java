@@ -21,6 +21,14 @@ public final class InterviewSession {
     /**
      * Описывает вопрос, который нужно показать или озвучить.
      *
+     * @param questionId идентификатор вопроса в банке
+     * @param number порядковый номер вопроса в сессии
+     * @param total общее число запланированных вопросов
+     * @param level уровень сложности
+     * @param topic тема вопроса
+     * @param text текст вопроса
+     * @param followUp является ли вопрос уточняющим
+     * @param followUpNumber номер уточнения
      * @version 1.0.0
      */
     public record Prompt(int questionId, int number, int total, String level, String topic, String text,
@@ -29,11 +37,21 @@ public final class InterviewSession {
     /**
      * Содержит решение по ответу и следующий вопрос.
      *
+     * @param action действие автомата интервью
+     * @param reason причина решения
+     * @param next следующий вопрос или {@code null} при завершении
+     * @param analysis анализ текущего ответа
+     * @param coverage покрытие эталонных понятий
+     * @param engine источник решения
+     * @param verdict заключение модели или {@code null}
      * @version 1.0.0
      */
     public record Step(Action action, String reason, Prompt next, AnswerAnalysis analysis, double coverage,
                        String engine, Verdict verdict) {}
 
+    /** Состояние одной попытки ответа на вопрос.
+     * @version 1.0.0
+     */
     static final class Attempt {
         final String promptText;
         String text = "";
@@ -58,6 +76,9 @@ public final class InterviewSession {
         }
     }
 
+    /** Состояние вопроса, его ответов и уже использованных уточнений.
+     * @version 1.0.0
+     */
     static final class QuestionRun {
         final CompiledQuestion cq;
         final List<Attempt> attempts = new ArrayList<>();
@@ -93,7 +114,12 @@ public final class InterviewSession {
     private boolean finished;
     private Snapshot undo;
 
-    /** @param levels уровни вопросов; null/пусто — все. Порядок: Стажёр → Junior → Middle → Senior. */
+    /** Создаёт интервью и формирует порядок вопросов выбранных уровней.
+     * @param kb подготовленный банк вопросов
+     * @param levels уровни вопросов; {@code null} или пустой список означает все уровни
+     * @param policy правила принятия решений и переходов
+     * @throws IllegalArgumentException если для выбранных уровней нет вопросов
+     */
     public InterviewSession(InterviewKnowledge kb, List<Level> levels, DecisionPolicy policy) {
         this.kb = kb;
         this.analyzer = kb.analyzer();
@@ -117,12 +143,21 @@ public final class InterviewSession {
         return prompt(current, false, 0);
     }
 
-    /** Горячий путь. */
+    /** Принимает ответ, используя один текст и для анализа, и для показа.
+     * @param text распознанный ответ
+     * @param timing время ответа и длительность речи
+     * @return решение интервью и следующий шаг
+     */
     public synchronized Step submit(String text, AnswerTiming timing) {
         return submit(text, text, timing);
     }
 
-    /** @param text текст для анализа (термины приведены к каноническим именам), @param display — текст для людей */
+    /** Принимает ответ с отдельным текстом для анализа и отображения.
+     * @param text текст для анализа с каноническими терминами
+     * @param display исходный текст для показа человеку
+     * @param timing время ответа и длительность речи
+     * @return решение интервью и следующий шаг
+     */
     public synchronized Step submit(String text, String display, AnswerTiming timing) {
         return submit(text, display, timing, null);
     }
@@ -183,7 +218,16 @@ public final class InterviewSession {
 
     // ------------------------------------------------------------------ предварительное решение и откат
 
-    /** Что решила бы система по этому тексту; сессию не меняет. */
+    /** Что решила бы система по этому тексту; сессию не меняет.
+     * @param followUp требуется ли уточнение
+     * @param reason причина решения
+     * @param coverage покрытие понятий эталона
+     * @param words число слов в тексте
+     * @param followUpQuestion текст уточнения или {@code null}
+     * @param engine источник предварительного решения
+     * @param verdict заключение модели или {@code null}
+     * @version 1.0.0
+     */
     public record Peek(boolean followUp, String reason, double coverage, int words, String followUpQuestion,
                        String engine, Verdict verdict) {}
 
@@ -217,7 +261,9 @@ public final class InterviewSession {
         return new Peek(d.followUp(), d.reason(), a.coverage(), a.words(), followUp, engine(v), v);
     }
 
-    /** Состояние до последнего submit(): позволяет отменить решение, если человек всё-таки продолжил отвечать. */
+    /** Состояние до последнего submit(): позволяет отменить решение, если человек всё-таки продолжил отвечать.
+     * @version 1.0.0
+     */
     private static final class Snapshot {
         final QuestionRun run;
         final Attempt att;
@@ -306,7 +352,9 @@ public final class InterviewSession {
                 att.promptText, true, idx);
     }
 
-    /** Ссылка на конкретный ответ — чтобы точный текст можно было подменить позже, в том числе из другого потока. */
+    /** Ссылка на конкретный ответ — чтобы точный текст можно было подменить позже, в том числе из другого потока.
+     * @version 1.0.0
+     */
     public static final class AttemptRef {
         final QuestionRun run;
         final Attempt attempt;
@@ -436,7 +484,12 @@ public final class InterviewSession {
         return InterviewScorer.score(kb, answered, plan.size(), !finished);
     }
 
-    /** Полные данные для отчёта (Excel). Содержит эталонные ответы — в браузер не отправлять. */
+    /** Формирует подробные данные для Excel-отчёта.
+     * @param candidate имя кандидата или подпись сессии
+     * @param startedAt время начала интервью
+     * @param settings настройки, фиксируемые в отчёте
+     * @return подробные результаты интервью, включая эталонные ответы
+     */
     public synchronized InterviewDetails details(String candidate, java.time.Instant startedAt,
                                                  java.util.Map<String, String> settings) {
         List<QuestionRun> answered = new ArrayList<>();

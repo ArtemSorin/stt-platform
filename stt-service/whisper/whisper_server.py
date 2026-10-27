@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Локальный HTTP-сервер Whisper (faster-whisper) для stt-service.
 
-Контракт (см. docs/whisper-openapi.yaml):
+Контракт (см. docs/api/whisper-helper.openapi.yaml):
   GET  /                  -> "ok"
   POST /transcribe        -> текст UTF-8
   POST /transcribe-json   -> {"text": "...", "words": [{"word","start","end","confidence"}]}
@@ -18,21 +18,35 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
 
-import numpy as np
-from faster_whisper import WhisperModel
-
 MODEL = None
 LOCK = Lock()  # одна модель — один запрос за раз
 ARGS = None
 
 
-def pcm_to_float(body: bytes) -> np.ndarray:
+def pcm_to_float(body: bytes):
+    """Преобразует PCM16 little-endian mono в массив float32 диапазона [-1, 1]."""
+    import numpy as np
+
     if len(body) % 2:
         body = body[:-1]
     return np.frombuffer(body, dtype="<i2").astype(np.float32) / 32768.0
 
 
 def transcribe(body: bytes):
+    """Распознаёт сырой PCM16 и возвращает текст со словами и временами в секундах.
+
+    Для пустого аудио возвращает пустой текст и список слов; вход без WAV-заголовка.
+    """
+    if ARGS.backend == "fake":
+        sample_count = len(body) // 2
+        if sample_count == 0:
+            return "", []
+        duration = sample_count / 16000
+        return "тестовая расшифровка", [{"word": "тестовая", "start": 0.0,
+                                         "end": round(min(duration, 0.4), 3), "confidence": 1.0}]
+
+    import numpy as np
+
     audio = pcm_to_float(body)
     if audio.size == 0:
         return "", []
@@ -91,6 +105,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9000)
+    parser.add_argument("--backend", choices=("faster-whisper", "fake"), default="faster-whisper",
+                        help="fake отвечает тестовой расшифровкой без загрузки модели")
     parser.add_argument("--model", default="small")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--compute-type", default="int8")
@@ -99,8 +115,10 @@ def main():
     parser.add_argument("--beam-size", type=int, default=5)
     ARGS = parser.parse_args()
     print(f"Загрузка модели {ARGS.model} ({ARGS.device}, {ARGS.compute_type})...", flush=True)
-    MODEL = WhisperModel(ARGS.model, device=ARGS.device, compute_type=ARGS.compute_type,
-                         cpu_threads=ARGS.cpu_threads)
+    if ARGS.backend == "faster-whisper":
+        from faster_whisper import WhisperModel
+        MODEL = WhisperModel(ARGS.model, device=ARGS.device, compute_type=ARGS.compute_type,
+                             cpu_threads=ARGS.cpu_threads)
     server = ThreadingHTTPServer((ARGS.host, ARGS.port), Handler)
     print(f"Whisper слушает http://{ARGS.host}:{ARGS.port}", flush=True)
     server.serve_forever()

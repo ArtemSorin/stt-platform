@@ -29,14 +29,16 @@ import java.util.concurrent.ConcurrentHashMap;
  *                   {"type":"stats","rtf":0.42} — доля времени звука, которую занимает распознавание (каждые 20 кадров)
  * </pre>
  *
- * @version 2.0.0
+ * @version 1.0.0
  */
 @Component
 public class SttWebSocketHandler extends AbstractWebSocketHandler {
     private static final Logger log = LoggerFactory.getLogger(SttWebSocketHandler.class);
     private static final int STATS_EVERY_FRAMES = 20;
 
-    /** Состояние одного соединения. */
+    /** Состояние одного соединения.
+     * @version 1.0.0
+     */
     private static final class State {
         final SpeechSession speech;
         double rtf;
@@ -57,12 +59,21 @@ public class SttWebSocketHandler extends AbstractWebSocketHandler {
         this.factory = factory;
     }
 
+    /** Создаёт независимую STT-сессию для подключённого клиента.
+     * @param session WebSocket-сессия клиента
+     * @throws Exception если не удалось открыть распознаватель Vosk
+     */
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         sessions.put(session.getId(), new State(factory.create()));
         log.info("STT-клиент подключён: {}", session.getId());
     }
 
+    /** Принимает бинарный PCM16-кадр и передаёт его распознавателю сессии.
+     * @param session WebSocket-сессия клиента
+     * @param message сообщение с PCM-данными
+     * @throws IOException при ошибке отправки ответа клиенту
+     */
     @Override
     protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) throws IOException {
         State state = sessions.get(session.getId());
@@ -82,6 +93,11 @@ public class SttWebSocketHandler extends AbstractWebSocketHandler {
             send(session, Json.write(Json.map("type", "stats", "rtf", Json.round(state.rtf, 3))));
     }
 
+    /** Обрабатывает управляющую текстовую команду клиента.
+     * @param session WebSocket-сессия клиента
+     * @param message команда, например {@code flush}
+     * @throws IOException при ошибке отправки финального результата
+     */
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws IOException {
         State state = sessions.get(session.getId());
@@ -97,11 +113,19 @@ public class SttWebSocketHandler extends AbstractWebSocketHandler {
         }
     }
 
+    /** Записывает транспортную ошибку WebSocket для диагностики.
+     * @param session WebSocket-сессия, в которой произошла ошибка
+     * @param exception причина транспортной ошибки
+     */
     @Override
     public void handleTransportError(WebSocketSession session, Throwable exception) {
         log.warn("Ошибка WebSocket {}: {}", session.getId(), exception.toString());
     }
 
+    /** Закрывает распознаватель после отключения клиента.
+     * @param session завершённая WebSocket-сессия
+     * @param status причина закрытия соединения
+     */
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         State state = sessions.remove(session.getId());

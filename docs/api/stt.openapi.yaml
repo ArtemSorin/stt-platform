@@ -1,0 +1,411 @@
+openapi: 3.1.0
+info:
+  title: STT и диаризация — HTTP API
+  version: 1.0.0
+  description: >-
+    Локальный API stt-service. Включает браузерные маршруты и API Vosk/Whisper.
+    Диаризация управляется внутри процесса и отдельного HTTP-контроллера не имеет. Браузерный аудиоформат — mono PCM16 little-endian,
+    16 кГц; параметры сессии передаются заголовком X-Session-Id.
+servers:
+  - url: http://127.0.0.1:8080
+    description: Локальная разработка
+security: []
+tags:
+  - name: Браузерное интервью
+    description: Локальный HTTP API страницы интервью на STT-сервисе.
+  - name: Vosk и Whisper
+    description: Потоковое распознавание и опциональный второй проход.
+paths:
+  /:
+    get:
+      tags: [Браузерное интервью]
+      operationId: openInterview
+      summary: Перейти к основному сценарию
+      responses:
+        '302':
+          description: Перенаправление на /integrated.html
+  /api/status:
+    get:
+      tags: [Браузерное интервью]
+      operationId: getInterviewStatus
+      summary: Получить состояние активного интервью
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Состояние сессии или фаза idle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InterviewStatus'
+        '403':
+          $ref: '#/components/responses/ApiError'
+  /api/enrollment/start:
+    post:
+      tags: [Браузерное интервью]
+      operationId: startEnrollment
+      summary: Создать сессию и начать запись эталона
+      description: Основной режим всегда запускает Nemotron/CAM++ и требует эталон кандидата.
+      responses:
+        '200':
+          description: Состояние фазы enrolling с идентификатором сессии
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InterviewStatus'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /api/test/start:
+    post:
+      tags: [Браузерное интервью]
+      operationId: startTestInterview
+      summary: Начать тест аналитики без диаризации
+      description: Вся речь с микрофона в ответе считается речью кандидата. Не запускает запись эталона и Nemotron/CAM++.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                candidate:
+                  type: string
+                  maxLength: 60
+                  description: Имя в отчёте
+                whisperEnabled:
+                  type: boolean
+                  default: false
+              additionalProperties: false
+      responses:
+        '200':
+          description: Активная тестовая сессия
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InterviewStatus'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /api/enrollment/audio:
+    post:
+      tags: [Браузерное интервью]
+      operationId: sendEnrollmentAudio
+      summary: Передать кадр эталонного аудио
+      parameters:
+        - $ref: '#/components/parameters/SessionIdRequired'
+        - $ref: '#/components/parameters/Sequence'
+      requestBody:
+        $ref: '#/components/requestBodies/PcmFrame'
+      responses:
+        '200':
+          $ref: '#/components/responses/Accepted'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+  /api/enrollment/finish:
+    post:
+      tags: [Браузерное интервью]
+      operationId: finishEnrollment
+      summary: Завершить запись эталона
+      parameters:
+        - $ref: '#/components/parameters/SessionIdRequired'
+      responses:
+        '200':
+          description: live при успешном эталоне или retry, если требуется повтор
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InterviewStatus'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /api/audio:
+    post:
+      tags: [Браузерное интервью]
+      operationId: sendInterviewAudio
+      summary: Передать аудиокадр интервью
+      description: В основном режиме поток содержит микрофон и системный звук. В тестовом — только микрофон, считающийся речью кандидата.
+      parameters:
+        - $ref: '#/components/parameters/SessionIdRequired'
+        - $ref: '#/components/parameters/Sequence'
+      requestBody:
+        $ref: '#/components/requestBodies/PcmFrame'
+      responses:
+        '200':
+          $ref: '#/components/responses/Accepted'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+  /api/question/asked:
+    post:
+      tags: [Браузерное интервью]
+      operationId: markQuestionAsked
+      summary: Сообщить, что вопрос задан и можно принимать ответ
+      parameters:
+        - $ref: '#/components/parameters/SessionIdRequired'
+      responses:
+        '200':
+          description: Актуальное состояние интервью
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InterviewStatus'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+  /api/question/skip:
+    post:
+      tags: [Браузерное интервью]
+      operationId: skipQuestion
+      summary: Пропустить текущий вопрос
+      parameters:
+        - $ref: '#/components/parameters/SessionIdRequired'
+      responses:
+        '200':
+          description: Актуальное состояние интервью
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InterviewStatus'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+  /api/tts/event:
+    post:
+      tags: [Браузерное интервью]
+      operationId: recordTtsEvent
+      summary: Записать событие озвучки вопроса
+      parameters:
+        - $ref: '#/components/parameters/SessionIdRequired'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                event:
+                  type: string
+                  enum: [start, finish, cancel, error]
+                question:
+                  type: string
+                voice:
+                  type: string
+                voice_lang:
+                  type: string
+              required: [event]
+              additionalProperties: true
+      responses:
+        '200':
+          $ref: '#/components/responses/Accepted'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+  /api/ui/seen:
+    post:
+      tags: [Браузерное интервью]
+      operationId: markSuggestionSeen
+      summary: Подтвердить показ подсказки или решения
+      parameters:
+        - $ref: '#/components/parameters/SessionIdRequired'
+        - name: X-Event-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          $ref: '#/components/responses/Accepted'
+        '403':
+          $ref: '#/components/responses/ApiError'
+  /api/finish:
+    post:
+      tags: [Браузерное интервью]
+      operationId: finishInterview
+      summary: Остановить аудиосессию и сформировать отчёт
+      parameters:
+        - $ref: '#/components/parameters/SessionIdRequired'
+        - name: X-Stop-Reason
+          in: header
+          required: false
+          schema:
+            type: string
+            enum: [requested, system_audio_lost, microphone_lost, capture_error]
+            default: requested
+      responses:
+        '200':
+          description: Состояние, обычно stopping до получения отчёта
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InterviewStatus'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+  /api/reports/{name}:
+    get:
+      tags: [Браузерное интервью]
+      operationId: downloadInterviewReport
+      summary: Скачать XLSX-отчёт через STT
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: XLSX-отчёт
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Отчёт не найден
+        '502':
+          description: Analytics недоступен
+  /api/whisper/status:
+    get:
+      tags: [Vosk и Whisper]
+      operationId: getWhisperStatus
+      summary: Проверить настройку и доступность Whisper
+      responses:
+        '200':
+          description: Состояние helper-сервера
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  configured: {type: boolean}
+                  reachable: {type: boolean}
+                  url: {type: string}
+                required: [configured, reachable, url]
+  /api/whisper/transcribe:
+    post:
+      tags: [Vosk и Whisper]
+      operationId: transcribeWithWhisper
+      summary: Выполнить текстовый второй проход
+      requestBody:
+        $ref: '#/components/requestBodies/PcmFrame'
+      responses:
+        '200':
+          description: Распознанный текст UTF-8
+          content:
+            text/plain:
+              schema: {type: string}
+        '502':
+          description: Whisper helper недоступен
+        '503':
+          description: Whisper не настроен или запрос прерван
+  /api/whisper/transcribe-json:
+    post:
+      tags: [Vosk и Whisper]
+      operationId: transcribeWithWhisperWords
+      summary: Получить текст и временные метки слов
+      requestBody:
+        $ref: '#/components/requestBodies/PcmFrame'
+      responses:
+        '200':
+          description: Текст и слова
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WhisperResult'
+        '502':
+          description: Whisper helper недоступен
+        '503':
+          description: Whisper не настроен или запрос прерван
+components:
+  parameters:
+    SessionId:
+      name: X-Session-Id
+      in: header
+      required: false
+      schema: {type: string}
+    SessionIdRequired:
+      name: X-Session-Id
+      in: header
+      required: true
+      schema: {type: string, minLength: 1}
+    Sequence:
+      name: X-Sequence
+      in: header
+      required: true
+      schema: {type: integer, minimum: 0}
+  requestBodies:
+    PcmFrame:
+      required: true
+      description: PCM16 little-endian mono, 16 кГц; один браузерный кадр не более 0,64 секунды.
+      content:
+        application/octet-stream:
+          schema:
+            type: string
+            format: binary
+  responses:
+    Accepted:
+      description: Запрос принят
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              ok: {type: boolean, const: true}
+            required: [ok]
+    ApiError:
+      description: Ошибка запроса
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+  schemas:
+    InterviewStatus:
+      type: object
+      properties:
+        session_id: {type: string}
+        phase:
+          type: string
+          enum: [idle, enrolling, preparing, retry, live, stopping, finished, error]
+        audio_seconds: {type: number}
+        error: {type: string}
+        role: {type: string}
+        integration:
+          type: object
+          additionalProperties: true
+      additionalProperties: true
+    ApiError:
+      type: object
+      properties:
+        error: {type: string}
+      required: [error]
+      additionalProperties: false
+    WhisperResult:
+      type: object
+      properties:
+        text: {type: string}
+        words:
+          type: array
+          items:
+            type: object
+            properties:
+              word: {type: string}
+              start: {type: number}
+              end: {type: number}
+              confidence: {type: number}
+            required: [word, start, end]
+      required: [text, words]

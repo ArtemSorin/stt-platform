@@ -310,12 +310,16 @@ public final class InterviewKnowledge {
         return analyzer;
     }
 
-    /** Исправляет «услышанные» Vosk английские термины (хешмеп → HashMap). */
+    /** Возвращает нормализатор терминов, распознанных Vosk.
+     * @return нормализатор канонических написаний
+     */
     public TermNormalizer normalizer() {
         return normalizer;
     }
 
-    /** Русское чтение английских терминов для озвучки. */
+    /** Возвращает преобразователь терминов для русской озвучки вопросов.
+     * @return преобразователь текста для TTS
+     */
     public SpokenText spoken() {
         return spoken;
     }

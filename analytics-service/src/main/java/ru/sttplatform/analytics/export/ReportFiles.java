@@ -8,7 +8,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
-/** Имена файлов отчётов: безопасные для файловой системы и для скачивания по ссылке. */
+/** Имена файлов отчётов: безопасные для файловой системы и для скачивания по ссылке.
+ * @version 1.0.0
+ */
 public final class ReportFiles {
 
     private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm", Locale.ROOT);
@@ -61,12 +63,19 @@ public final class ReportFiles {
         return sb.toString();
     }
 
-    /** Имя, которое мы сами могли создать (защита от обхода каталога при скачивании). */
+    /** Проверяет, соответствует ли имя файла допустимому шаблону отчёта.
+     * @param name имя файла из запроса
+     * @return {@code true}, если имя безопасно для поиска в каталоге отчётов
+     */
     public static boolean isSafeName(String name) {
         return name != null && SAFE.matcher(name).matches();
     }
 
-    /** Если файл с таким именем уже есть — добавляет _2, _3... (отчёт никогда не затирает предыдущий). */
+    /** Выбирает свободный путь и добавляет суффикс, чтобы не перезаписать отчёт.
+     * @param dir каталог отчётов
+     * @param name желаемое имя XLSX-файла
+     * @return свободный путь к файлу
+     */
     public static Path uniquePath(Path dir, String name) {
         Path p = dir.resolve(name);
         String base = name.substring(0, name.length() - ".xlsx".length());

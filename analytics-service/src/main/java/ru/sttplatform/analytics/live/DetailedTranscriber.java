@@ -6,7 +6,7 @@ import java.util.concurrent.CompletableFuture;
 /**
  * Второй проход, который возвращает слова с временными метками.
  *
- * @version 2.0.0
+ * @version 1.0.0
  */
 public interface DetailedTranscriber extends Transcriber {
 
@@ -17,6 +17,7 @@ public interface DetailedTranscriber extends Transcriber {
      * @param start начало, секунды
      * @param end конец, секунды
      * @param confidence оценка модели или {@code null}
+     * @version 1.0.0
      */
     record Word(String word, double start, double end, Double confidence) {}
 
@@ -25,6 +26,7 @@ public interface DetailedTranscriber extends Transcriber {
      *
      * @param text полный текст
      * @param words слова (может быть пустым, если сервис отдал только текст)
+     * @version 1.0.0
      */
     record Transcript(String text, List<Word> words) {}
 

@@ -11,6 +11,11 @@ package ru.sttplatform.analytics.engine;
  * @param topic            id словаря → «относится к теме вопроса»
  * @param followUps        уточняющие вопросы с привязкой к понятиям пула
  * @param glossaryInPool   сколько терминов/сленга среди понятий пула
+ * @param question         исходный вопрос из банка
+ * @param poolTotalW       суммарный вес понятий пула
+ * @param coreTotalW       суммарный вес понятий ядра
+ * @param refWords         число слов в эталонном ответе
+ * @param targetWords      число целевых слов, связанных с понятиями вопроса
  * @version 1.0.0
  */
 public record CompiledQuestion(Question question, int[] poolIds, double[] poolW, boolean[] core, double poolTotalW,
@@ -20,6 +25,8 @@ public record CompiledQuestion(Question question, int[] poolIds, double[] poolW,
     /**
      * Содержит текст уточнения и индексы понятий, которые оно проверяет.
      *
+     * @param text текст уточняющего вопроса
+     * @param poolIdx индексы понятий в скомпилированном пуле
      * @version 1.0.0
      */
     public record FollowUp(String text, int[] poolIdx) {}

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Тест аналитики интервью</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    body{font-family:system-ui,sans-serif;max-width:960px;margin:28px auto;padding:0 16px;color:#222}
+    .bar,.card{border:1px solid #8885;border-radius:10px;padding:14px;margin:12px 0}
+    .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    input,select,button{font:inherit;padding:8px 10px}
+    button{cursor:pointer}button:disabled{opacity:.5;cursor:default}
+    #question{font-size:22px;line-height:1.45}#partial{min-height:36px}
+    #error{color:#a20;background:#fee;padding:10px;border-radius:8px;white-space:pre-wrap}
+    #log{font:13px ui-monospace,Consolas,monospace;max-height:240px;overflow:auto}
+    #log div{padding:4px 0;border-bottom:1px dashed #8885}
+    #report{white-space:pre-wrap;overflow-wrap:anywhere}
+    .muted{opacity:.7;font-size:13px}.hidden{display:none}
+  </style>
+</head>
+<body>
+  <h1>Тест аналитики интервью</h1>
+  <p>Упрощённый сценарий без записи эталона и диаризации. Весь звук микрофона во время ответа считается речью кандидата.</p>
+  <p><a href="/integrated.html">Перейти к основному сценарию с диаризацией</a></p>
+  <div class="bar" id="setup">
+    <input id="candidate" maxlength="60" placeholder="Имя кандидата">
+    <label><input type="checkbox" id="tts" checked> озвучивать вопросы</label>
+    <label><input type="checkbox" id="whisper"> уточнять Whisper</label>
+    <button id="start">Начать тест</button>
+  </div>
+  <div class="bar hidden" id="controls">
+    <button id="asked" class="hidden">Вопрос задан, начать ответ</button>
+    <button id="skip" disabled>Пропустить вопрос</button>
+    <button id="finish" disabled>Завершить интервью</button>
+    <span id="status">Ожидание</span>
+  </div>
+  <div id="error" class="hidden"></div>
+  <section id="interview" class="hidden">
+    <div class="card"><div id="question-meta" class="muted"></div><div id="question">Ожидание вопроса</div></div>
+    <div class="card"><strong>Распознанный ответ</strong><div id="partial">Ожидание речи</div></div>
+    <div class="card"><strong>Предварительная оценка</strong><div id="preview">Пока нет подсказок</div></div>
+    <div class="card"><strong>Решение</strong><div id="decision">Ожидание ответа</div></div>
+    <div class="card"><strong>Whisper</strong><div id="whisper-state">Не запущен</div></div>
+    <div class="card"><strong>События</strong><div id="log"></div></div>
+  </section>
+  <section id="report" class="card hidden"></section>
+  <script src="/test-app.js"></script>
+</body>
+</html>

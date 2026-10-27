@@ -7,6 +7,9 @@ package ru.sttplatform.analytics.engine;
  */
 public final class AnswerAnalyzer {
 
+    /** Временная хеш-таблица для поиска совпавших слов ответа.
+     * @version 1.0.0
+     */
     private static final class Ws {
         final long[] hashes = new long[4096];
         final int[] ids = new int[4096];

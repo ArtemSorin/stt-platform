@@ -1,6 +1,8 @@
 package ru.sttplatform.analytics.engine;
 
-/** Примитивная хеш-таблица long→int с открытой адресацией: без боксинга и аллокаций при чтении. */
+/** Примитивная хеш-таблица long→int с открытой адресацией: без боксинга и аллокаций при чтении.
+ * @version 1.0.0
+ */
 public final class LongIntMap {
     private long[] keys;
     private int[] vals;

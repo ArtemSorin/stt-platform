@@ -13,6 +13,7 @@
 Бэкенды (--backend):
   torch  PyTorch, GPU (bf16) если есть, иначе CPU (fp32); точный, с кэшем текста между вопросами
   onnx   int8 ONNX на CPU без torch; в ~2,5 раза быстрее torch на CPU, но не побитово точный
+  fake   детерминированная заглушка формата API, без сторонних зависимостей и весов
   heuristic  НЕ модель: подсчёт общих слов вместо логитов. Только чтобы проверить порты и протокол без весов.
 
 Установка:  pip install -r requirements.txt   (в файле выбран бэкенд)
@@ -47,6 +48,7 @@ class PriorityGate:
         self._high_waiting = 0
 
     def acquire(self, high: bool):
+        """Захватывает слот модели; высокий приоритет обходит очередь низкого."""
         with self._cond:
             if high:
                 self._high_waiting += 1
@@ -61,12 +63,15 @@ class PriorityGate:
             self._busy = True
 
     def release(self):
+        """Освобождает слот модели и будит ожидающие запросы."""
         with self._cond:
             self._busy = False
             self._cond.notify_all()
 
 
 class Service:
+    """Сериализует вызовы модели, учитывает приоритеты и собирает метрики HTTP-сервера."""
+
     def __init__(self, judge, backend: str, model: str):
         self.judge, self.backend, self.model = judge, backend, model
         self.gate = PriorityGate()
@@ -78,6 +83,7 @@ class Service:
         self._warned = set()
 
     def run(self, request: dict, high: bool) -> dict:
+        """Оценивает один запрос и возвращает ответ backend без изменения его формата."""
         self.gate.acquire(high)
         started = time.perf_counter()
         try:
@@ -97,6 +103,7 @@ class Service:
         return response
 
     def run_batch(self, requests: list, high: bool) -> list:
+        """Оценивает список запросов и сохраняет порядок результатов."""
         self.gate.acquire(high)
         try:
             return self.judge.judge_batch(requests)
@@ -104,6 +111,7 @@ class Service:
             self.gate.release()
 
     def status(self) -> dict:
+        """Возвращает backend, модель, счётчики и задержки обработки."""
         with self._lock:
             recent = sorted(self.recent)
             p95 = recent[int(len(recent) * 0.95) - 1] if recent else None
@@ -117,6 +125,9 @@ class Service:
 
     def check(self, request: dict) -> dict:
         """Размеры в токенах без запуска модели; инструкции длиннее лимита обрезаются справа вместе с суффиксом."""
+        check = getattr(self.judge, "check", None)
+        if check is not None:
+            return check(request)
         parsed, candidates, tok = self.judge.compile(request)
         cap = self.judge.config.instruction_max_tokens
         over = sorted({c.question_id for c in candidates if self.judge.text.count(c.instruction) > cap})
@@ -144,6 +155,7 @@ class Service:
 
 
 def make_handler(service: Service):
+    """Создаёт HTTP-обработчик, связанный с экземпляром сервиса оценки."""
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         # заголовки и тело — одним пакетом, без Nagle: иначе каждый ответ стоит лишние ~40 мс (delayed ACK клиента)
@@ -195,7 +207,47 @@ def make_handler(service: Service):
     return Handler
 
 
+class FakeJudge:
+    """Возвращает фиксированные нейтральные оценки для проверки HTTP-связи."""
+
+    backend = "fake"
+    state_max = 512
+
+    def __call__(self, request):
+        answers = {}
+        for question_id, question in request.get("questions", {}).items():
+            question_type = question.get("type")
+            if question_type == "noul":
+                answers[question_id] = {"type": "noul", "noul": 0.5}
+            elif question_type == "score":
+                answers[question_id] = {"type": "score", "score": 2.0}
+            elif question_type == "ranking":
+                criteria = question.get("criteria", {})
+                ids = list(criteria)
+                probability = 1.0 / len(ids) if ids else 0.0
+                answers[question_id] = {
+                    "type": "ranking",
+                    "probabilities": {key: probability for key in ids},
+                }
+        return {
+            "model": "FRIDA-Decisions (fake)",
+            "answers": answers,
+            "margins": {},
+            "usage": {"backend": self.backend, "milliseconds": 0.0, "state_truncated": False},
+        }
+
+    def judge_batch(self, requests):
+        return [self(request) for request in requests]
+
+    def check(self, request):
+        return {"tokens": {}, "state_max_tokens": self.state_max,
+                "instruction_cap": 0, "instructions_over_cap": []}
+
+
 def load_judge(args):
+    """Загружает выбранный backend FRIDA или тестовую заглушку."""
+    if args.backend == "fake":
+        return FakeJudge()
     if args.backend == "heuristic":
         log.warning("=" * 70)
         log.warning("ВНИМАНИЕ: режим heuristic — это НЕ FRIDA-Decisions, оценки не имеют отношения к модели.")
@@ -210,10 +262,11 @@ def load_judge(args):
 
 
 def main(argv=None):
+    """Разбирает параметры процесса, загружает backend и запускает HTTP-сервер."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9100)
-    parser.add_argument("--backend", choices=("torch", "onnx", "heuristic"), default="torch")
+    parser.add_argument("--backend", choices=("torch", "onnx", "heuristic", "fake"), default="torch")
     parser.add_argument("--model", default="ai-forever/FRIDA-Decisions", help="репозиторий Hugging Face или локальная папка")
     parser.add_argument("--device", default=None, help="torch: cuda | cpu (по умолчанию cuda, если есть)")
     parser.add_argument("--threads", type=int, default=None, help="onnx: число потоков CPU")

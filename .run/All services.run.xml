@@ -1,9 +1,7 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="All services" type="CompoundRunConfigurationType">
     <toRun type="SpringBootApplicationConfigurationType" name="stt-service" />
-    <toRun type="SpringBootApplicationConfigurationType" name="diarization-service" />
     <toRun type="SpringBootApplicationConfigurationType" name="analytics-service" />
-    <toRun type="SpringBootApplicationConfigurationType" name="gateway" />
     <method v="2" />
   </configuration>
 </component>

@@ -15,7 +15,7 @@ import java.util.Map;
 /**
  * Публичный контракт Whisper для других микросервисов: тело запроса — сырой PCM 16 кГц / 16 бит / моно.
  *
- * @version 2.0.0
+ * @version 1.0.0
  */
 @RestController
 @RequestMapping("/api/whisper")

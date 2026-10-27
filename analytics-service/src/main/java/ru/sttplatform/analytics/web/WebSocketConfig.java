@@ -8,28 +8,34 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 import org.springframework.web.socket.server.standard.ServletServerContainerFactoryBean;
 
 /**
- * Регистрирует канал {@code /ws/interview} и ограничивает размер сообщений.
+ * Регистрирует закрытый канал событий STT и ограничивает размер сообщений.
  *
- * @version 2.0.0
+ * @version 1.0.0
  */
 @Configuration
 @EnableWebSocket
 public class WebSocketConfig implements WebSocketConfigurer {
 
     private final InterviewWebSocketHandler interviewHandler;
+    private final InternalEventsHandshakeInterceptor authentication;
 
     /**
      * Создаёт конфигурацию.
      *
      * @param interviewHandler обработчик интервью
+     * @param authentication проверка общего секрета handshake
      */
-    public WebSocketConfig(InterviewWebSocketHandler interviewHandler) {
+    public WebSocketConfig(InterviewWebSocketHandler interviewHandler, InternalEventsHandshakeInterceptor authentication) {
         this.interviewHandler = interviewHandler;
+        this.authentication = authentication;
     }
 
+    /** Регистрирует защищённый внутренний канал обмена событиями интервью.
+     * @param registry реестр серверных WebSocket-маршрутов
+     */
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-        registry.addHandler(interviewHandler, "/ws/interview").setAllowedOrigins("*");
+        registry.addHandler(interviewHandler, "/ws/interview-events").addInterceptors(authentication);
     }
 
     /**

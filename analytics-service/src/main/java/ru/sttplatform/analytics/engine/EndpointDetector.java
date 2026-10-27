@@ -93,6 +93,18 @@ public final class EndpointDetector {
             sum += (double) s * s;
         }
         double rms = Math.sqrt(sum / n);
+        return onFrameRms(n, rms, partialWords, endsWithConnector);
+    }
+
+    /** Обрабатывает число сэмплов и энергию кадра без получения сырого PCM.
+     * @param n число сэмплов в кадре
+     * @param rms среднеквадратичная энергия кадра
+     * @param partialWords число слов в текущей гипотезе Vosk
+     * @param endsWithConnector заканчивается ли гипотеза союзом или предлогом
+     * @return новое состояние детектора
+     */
+    public State onFrameRms(int n, double rms, int partialWords, boolean endsWithConnector) {
+        if (state == State.NO_SPEECH || n == 0) return state;
         long frameStart = samples;
         samples += n;
 
@@ -147,6 +159,21 @@ public final class EndpointDetector {
             state = State.ENDPOINT;
         }
         return state;
+    }
+
+    /** Синхронизирует таймеры с состоянием VAD, рассчитанным на стороне STT.
+     * @param externalState состояние внешнего VAD
+     * @param audioMs позиция в аудиопотоке в миллисекундах
+     * @param speechStartMs начало речи в миллисекундах или отрицательное значение, если речь не началась
+     * @param speechDurationMs длительность речи в миллисекундах
+     * @param silenceMs длительность тишины в миллисекундах
+     */
+    public void observeExternal(State externalState, long audioMs, long speechStartMs,
+                                long speechDurationMs, long silenceMs) {
+        samples = Math.max(0, audioMs * c.sampleRate / 1000L);
+        speechStart = speechStartMs < 0 ? -1 : speechStartMs * c.sampleRate / 1000L;
+        lastVoice = Math.max(0, samples - silenceMs * c.sampleRate / 1000L);
+        state = externalState;
     }
 
     private long toMs(long s) {

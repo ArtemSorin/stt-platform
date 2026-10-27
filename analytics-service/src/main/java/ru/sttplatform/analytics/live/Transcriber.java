@@ -5,7 +5,7 @@ import java.util.concurrent.CompletableFuture;
 /**
  * Второй, более точный проход распознавания (Whisper). Работает асинхронно, вне критического пути решения.
  *
- * @version 2.0.0
+ * @version 1.0.0
  */
 @FunctionalInterface
 public interface Transcriber {

@@ -45,8 +45,9 @@ public class InterviewConfig {
     /**
      * Выполняет операцию публичного контракта компонента.
      *
-     * @param p параметр операции
-     * @return результат операции
+     * @param p настройки ограничений интервью
+     * @param j настройки порогов FRIDA-Decisions
+     * @return правила принятия решений по ответам
      */
     @Bean
     public DecisionPolicy decisionPolicy(InterviewProperties p, JudgeProperties j) {

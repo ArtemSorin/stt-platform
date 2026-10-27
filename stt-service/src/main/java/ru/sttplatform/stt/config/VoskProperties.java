@@ -5,6 +5,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * Хранит путь к модели Vosk и частоту аудио.
  *
+ * @param modelPath путь к каталогу модели распознавания
+ * @param sampleRate частота входных аудиосэмплов в герцах
  * @version 1.0.0
  */
 @ConfigurationProperties(prefix = "vosk")

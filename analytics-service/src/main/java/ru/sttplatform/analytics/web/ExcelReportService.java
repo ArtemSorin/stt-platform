@@ -13,7 +13,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-/** Сохраняет Excel-отчёт в interview.reports-dir (по умолчанию ./reports) и отдаёт ссылку для скачивания. */
+/** Сохраняет Excel-отчёт в interview.reports-dir (по умолчанию ./reports) и отдаёт ссылку для скачивания.
+ * @version 1.0.0
+ */
 @Service
 public class ExcelReportService implements ReportExporter {
 
@@ -51,7 +53,10 @@ public class ExcelReportService implements ReportExporter {
         return new Result(name, file.toString(), url);
     }
 
-    /** Файл для скачивания или null (имя неподходящее, файла нет, скачивание выключено). */
+    /** Находит разрешённый файл отчёта, если скачивание включено.
+     * @param name имя файла из URL
+     * @return путь к существующему отчёту или {@code null}, если файл недоступен
+     */
     public Path find(String name) {
         if (!download || !ReportFiles.isSafeName(name)) return null;
         Path p = dir.resolve(name).normalize();

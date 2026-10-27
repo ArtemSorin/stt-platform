@@ -10,6 +10,9 @@ package ru.sttplatform.analytics.engine;
  * @param coreCoverage то же для «ядра» понятий
  * @param termTokens   сколько раз использованы термины/сленг
  * @param glossaryIds  различные термины/сленг из словаря, использованные в ответе
+ * @param newHits      ключевые понятия, добавленные этой попыткой ответа
+ * @param hedgeCount   число маркеров неуверенности в ответе
+ * @param ignorance    вероятность отказа от ответа по заключению модели
  * @version 1.0.0
  */
 public record AnswerAnalysis(int words, double techWeight, double onTopicWeight, double coverage, double coreCoverage,

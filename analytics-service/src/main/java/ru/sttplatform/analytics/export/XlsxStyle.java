@@ -1,6 +1,18 @@
 package ru.sttplatform.analytics.export;
 
-/** Неизменяемое описание стиля ячейки. Дубликаты схлопываются в XlsxBook. Цвета — RRGGBB. */
+/** Неизменяемое описание стиля ячейки. Дубликаты схлопываются в XlsxBook. Цвета — RRGGBB.
+ * @param bold выделять ли текст полужирным
+ * @param italic выделять ли текст курсивом
+ * @param size размер шрифта в пунктах
+ * @param color цвет текста в формате RRGGBB
+ * @param fill цвет заливки в формате RRGGBB
+ * @param border добавлять ли границу ячейки
+ * @param halign горизонтальное выравнивание
+ * @param valign вертикальное выравнивание
+ * @param wrap переносить ли текст по словам
+ * @param numFmt формат числа или даты Excel
+ * @version 1.0.0
+ */
 public record XlsxStyle(boolean bold, boolean italic, double size, String color, String fill, boolean border,
                         String halign, String valign, boolean wrap, String numFmt) {
 
