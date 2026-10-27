@@ -5,7 +5,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * Настройки Whisper (префикс {@code whisper}).
  *
- * @param url адрес Python-сервера; пусто — Whisper выключен
+ * @param url адрес Python-сервера; пусто выключает Whisper, если автозапуск не включён
  * @param autostart запускать ли {@code whisper_server.py} вместе с сервисом
  * @param python исполняемый файл Python
  * @param script путь к {@code whisper_server.py}
@@ -22,6 +22,7 @@ public record WhisperProperties(String url, Boolean autostart, String python, St
     public WhisperProperties {
         if (url == null) url = "";
         if (autostart == null) autostart = false;
+        if (url.isBlank() && autostart) url = "http://127.0.0.1:9000";
         if (python == null || python.isBlank()) python = "python";
         if (script == null || script.isBlank()) script = "whisper/whisper_server.py";
         if (model == null || model.isBlank()) model = "small";

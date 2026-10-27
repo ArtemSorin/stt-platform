@@ -10,7 +10,7 @@
     </parent>
     <artifactId>stt-service</artifactId>
     <name>stt-service</name>
-    <description>Распознавание речи: Vosk (потоковое, WebSocket) + Whisper (второй проход, HTTP)</description>
+    <description>STT и диаризация: Vosk, Whisper, Nemotron/CAM++ и браузерное интервью</description>
 
     <dependencies>
         <dependency>
@@ -36,11 +36,28 @@
             <version>${jna.version}</version>
         </dependency>
         <dependency>
+            <groupId>com.github.k2-fsa.sherpa-onnx</groupId>
+            <artifactId>sherpa-onnx-jvm</artifactId>
+            <version>v1.13.8</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.k2-fsa.sherpa-onnx</groupId>
+            <artifactId>sherpa-onnx-native-lib-win-x64</artifactId>
+            <version>v1.13.8</version>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <repositories>
+        <repository>
+            <id>jitpack.io</id>
+            <url>https://jitpack.io</url>
+        </repository>
+    </repositories>
 
     <build>
         <plugins>

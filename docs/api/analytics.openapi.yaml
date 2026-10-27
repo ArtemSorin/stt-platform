@@ -1,0 +1,101 @@
+openapi: 3.1.0
+info:
+  title: Аналитика интервью — HTTP API
+  version: 1.0.0
+  description: >-
+    HTTP-маршруты analytics-service. События живого интервью передаются по закрытому
+    WebSocket /ws/interview-events; он описан отдельно в interview-events.md.
+servers:
+  - url: http://127.0.0.1:8083
+    description: Локальная разработка
+security: []
+tags:
+  - name: Отчёты
+    description: Скачивание созданных XLSX-файлов.
+  - name: Диагностика FRIDA
+    description: Состояние клиента модели и локальная самопроверка.
+paths:
+  /api/reports/{name}:
+    get:
+      tags: [Отчёты]
+      operationId: downloadReport
+      summary: Скачать сохранённый XLSX-отчёт
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Безопасное имя существующего файла в каталоге отчётов
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Отчёт собеседования
+          headers:
+            Content-Disposition:
+              schema: {type: string}
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Файл не найден или выдача отчётов отключена
+  /api/judge/status:
+    get:
+      tags: [Диагностика FRIDA]
+      operationId: getJudgeStatus
+      summary: Получить состояние клиента и helper-сервера FRIDA
+      responses:
+        '200':
+          description: Статистика клиента и ответ helper-сервера
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  client:
+                    type: object
+                    additionalProperties: true
+                  server:
+                    type: object
+                    additionalProperties: true
+                required: [client, server]
+  /api/judge/selfcheck:
+    get:
+      tags: [Диагностика FRIDA]
+      operationId: runJudgeSelfcheck
+      summary: Сравнить модель с ожидаемым поведением на синтетических ответах
+      description: Самопроверка использует до 20 вопросов из текущего банка и может делать запросы к модели.
+      parameters:
+        - name: questions
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+            default: 6
+      responses:
+        '200':
+          description: Результаты четырёх синтетических сценариев для каждого вопроса
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  passed: {type: integer}
+                  checks: {type: integer}
+                  latencyMs:
+                    type: object
+                    additionalProperties: true
+                  decisionDeadlineMs: {type: integer}
+                  withinDeadline: {type: [boolean, 'null']}
+                  hint: {type: string}
+                  rows:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                additionalProperties: true
+        '400':
+          description: Некорректный query-параметр

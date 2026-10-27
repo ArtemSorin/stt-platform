@@ -14,7 +14,9 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 
@@ -83,6 +85,10 @@ public final class LiveInterview {
     private Timing timing = Timing.defaults();
     private Transcriber transcriber;
     private long pendingWaitMs = 25_000;
+    private boolean awaitExternalRefinement;
+    private final Map<Integer, InterviewSession.AttemptRef> answerRefs = new ConcurrentHashMap<>();
+    private final Set<Integer> pendingRefinements = ConcurrentHashMap.newKeySet();
+    private final Object refinementLock = new Object();
     private ReportExporter exporter;
     private String candidate = "";
     private java.time.Instant startedAt = java.time.Instant.now();
@@ -167,6 +173,12 @@ public final class LiveInterview {
     public void setTranscriber(Transcriber transcriber, long waitMs) {
         this.transcriber = transcriber;
         this.pendingWaitMs = waitMs;
+    }
+
+    /** Ожидает уточнение текста, которое STT пришлёт по внутреннему каналу. */
+    public void setRefinementWait(long waitMs) {
+        this.pendingWaitMs = Math.max(0, waitMs);
+        this.awaitExternalRefinement = waitMs > 0;
     }
 
     /** Куда и от чьего имени сохранять итоговый отчёт (Excel). */
@@ -263,6 +275,28 @@ public final class LiveInterview {
         }
 
         EndpointDetector.State st = detector.onFrame(pcm, len, words, connector);
+        advance(st);
+    }
+
+    /** Передаёт уже распознанный кадр; аналитика не получает PCM-аудио. */
+    public void onSttFrame(String type, String text, int samples, double rms, double asrMs,
+                           String vadState, long audioMs, long speechStartMs,
+                           long speechDurationMs, long silenceMs) {
+        if (finished || phase == Phase.IDLE || phase == Phase.WAIT_READY) return;
+        SpeechEngine.Result result = null;
+        if ("partial".equals(type) || "final".equals(type)) {
+            result = new SpeechEngine.Result("final".equals(type), text == null ? "" : text);
+            foldResults(List.of(result));
+            send("partial", "text", currentDisplay);
+        }
+        if (speech instanceof EventSpeechEngine eventSpeech) eventSpeech.observe(result);
+        trackRealtime((long) (asrMs * 1_000_000), samples * 2);
+        detector.observeExternal(EndpointDetector.State.valueOf(vadState), audioMs,
+                speechStartMs, speechDurationMs, silenceMs);
+        advance(detector.state());
+    }
+
+    private void advance(EndpointDetector.State st) {
         switch (phase) {
             case LISTENING -> {
                 if (st == EndpointDetector.State.ENDPOINT) enterTentative();
@@ -290,6 +324,32 @@ public final class LiveInterview {
     public void onStop() {
         if (finished) return;
         finishInterview();
+    }
+
+    /** Применяет позднюю расшифровку Whisper к тому же ответу, который уже оценён. */
+    public void onRefined(int id, String text) {
+        InterviewSession.AttemptRef ref = answerRefs.get(id);
+        if (ref == null || text == null || text.isBlank()) return;
+        interview.refine(ref, normalizer.normalize(text, false), normalizer.normalize(text, true), 2);
+        startScoring(ref, id);
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("type", "refined");
+        event.put("answerId", id);
+        event.put("text", normalizer.normalize(text, true));
+        out.send(event);
+    }
+
+    /** Завершает ожидание уточнения, включая отключённый или завершившийся ошибкой Whisper. */
+    public void onRefineDone(int id) {
+        onRefineDone(id, "");
+    }
+
+    /** Закрывает ожидание уточнения и показывает ошибку Whisper, если она пришла. */
+    public void onRefineDone(int id, String error) {
+        pendingRefinements.remove(id);
+        synchronized (refinementLock) { refinementLock.notifyAll(); }
+        if (error != null && !error.isBlank())
+            out.send(Map.of("type", "whisper_error", "answerId", id, "message", error));
     }
 
     // ------------------------------------------------------------------ стадии конца ответа
@@ -370,6 +430,9 @@ public final class LiveInterview {
         InterviewSession.Step step = interview.submit(text, display, at, verdict);   // ← горячий путь
         long micros = (System.nanoTime() - t0) / 1000;
         InterviewSession.AttemptRef ref = interview.lastAttempt();
+        int committedAnswerId = ++answerId;
+        if (ref != null) answerRefs.put(committedAnswerId, ref);
+        if (awaitExternalRefinement && !text.isBlank()) pendingRefinements.add(committedAnswerId);
         tentative = null;
         tentativeFuture = null;
         tentativeVerdict = null;
@@ -383,7 +446,7 @@ public final class LiveInterview {
         decision.put("coveragePercent", (int) Math.round(step.coverage() * 100));
         decision.put("answerWords", step.analysis().words());
         decision.put("recognized", display);
-        decision.put("answerId", ++answerId);
+        decision.put("answerId", committedAnswerId);
         Map<String, Object> timingInfo = new LinkedHashMap<>();
         timingInfo.put("silenceMs", detector.silenceMs());           // сколько ждали тишины до принятия решения
         timingInfo.put("decisionMicros", micros);                    // сколько заняло само решение
@@ -453,6 +516,8 @@ public final class LiveInterview {
     /** Человек продолжил отвечать в окне отмены: откатываем решение, он договаривает на прежний вопрос. */
     private void retract() {
         answerVersion++;                                   // устаревший результат Whisper игнорируем
+        answerRefs.remove(answerId);
+        onRefineDone(answerId);
         InterviewSession.Prompt p = interview.undoLast();
         pendingFinish = false;
         phase = Phase.LISTENING;
@@ -576,12 +641,32 @@ public final class LiveInterview {
     }
 
     private void sendReport() {
+        if (transcriber != null && pendingRefinements.isEmpty())
+            send("finalizing", "message", "Собираю итоговый отчёт после уточнения распознавания.");
+        if (!pendingRefinements.isEmpty()) {
+            send("finalizing", "message", "Жду уточнения распознанного текста…");
+            CompletableFuture.runAsync(() -> {
+                long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(pendingWaitMs);
+                synchronized (refinementLock) {
+                    while (!pendingRefinements.isEmpty() && System.nanoTime() < deadline) {
+                        long remaining = deadline - System.nanoTime();
+                        try { TimeUnit.NANOSECONDS.timedWait(refinementLock, remaining); }
+                        catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); break; }
+                    }
+                }
+                sendReportNow();
+            });
+            return;
+        }
+        sendReportNow();
+    }
+
+    private void sendReportNow() {
         if (!pending.isEmpty()) {
-            send("finalizing", "message", "Уточняю распознанный текст…");
             try {
                 CompletableFuture.allOf(pending.toArray(new CompletableFuture<?>[0])).get(pendingWaitMs, TimeUnit.MILLISECONDS);
             } catch (Exception ignored) {
-                // не дождались Whisper — считаем по тому, что есть
+                // Фоновая оценка не должна блокировать выдачу отчёта.
             }
         }
         InterviewDetails details = interview.details(candidate, startedAt, settings);

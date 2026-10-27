@@ -10,7 +10,7 @@
     </parent>
     <artifactId>analytics-service</artifactId>
     <name>analytics-service</name>
-    <description>Аналитика ответов: банк вопросов, решения, оценки, Excel-отчёт (WebSocket /ws/interview)</description>
+    <description>Аналитика ответов: вопросы, решения, оценки и Excel-отчёты по событиям STT (/ws/interview-events)</description>
 
     <dependencies>
         <dependency>

@@ -18,6 +18,19 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class WsPeerTest {
     @Test
+    void notifies_owner_when_remote_websocket_closes() {
+        AtomicInteger closed = new AtomicInteger();
+        WebSocket socket = (WebSocket) Proxy.newProxyInstance(WebSocket.class.getClassLoader(),
+                new Class<?>[]{WebSocket.class}, (proxy, method, args) -> null);
+        WsPeer peer = new WsPeer(ignored -> {}, closed::incrementAndGet);
+        peer.attach(socket);
+
+        peer.onClose(socket, 1001, "service stopped");
+
+        assertEquals(1, closed.get());
+    }
+
+    @Test
     void serializes_concurrent_audio_and_text_sends_on_one_websocket() throws Exception {
         AtomicInteger inFlight = new AtomicInteger();
         AtomicInteger maxInFlight = new AtomicInteger();

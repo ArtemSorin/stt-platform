@@ -12,6 +12,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.Map;
 
 /**
  * Клиентская сторона WebSocket между микросервисами. Принимает JSON-сообщения по частям,
@@ -59,9 +60,16 @@ public final class WsPeer implements WebSocket.Listener {
      * @return подключённый клиент
      */
     public static WsPeer connect(String url, Consumer<JsonNode> handler, Runnable onClosed) {
+        return connect(url, Map.of(), handler, onClosed);
+    }
+
+    /** Подключается с HTTP-заголовками handshake, например для закрытого канала сервисов. */
+    public static WsPeer connect(String url, Map<String, String> headers,
+                                 Consumer<JsonNode> handler, Runnable onClosed) {
         WsPeer peer = new WsPeer(handler, onClosed);
-        peer.attach(CLIENT.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(10))
-                .buildAsync(URI.create(url), peer).join());
+        var builder = CLIENT.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(10));
+        headers.forEach(builder::header);
+        peer.attach(builder.buildAsync(URI.create(url), peer).join());
         return peer;
     }
 

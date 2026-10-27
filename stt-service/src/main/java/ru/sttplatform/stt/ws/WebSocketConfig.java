@@ -10,7 +10,7 @@ import org.springframework.web.socket.server.standard.ServletServerContainerFact
 /**
  * Регистрирует канал {@code /ws/stt} и ограничивает размер сообщений.
  *
- * @version 2.0.0
+ * @version 1.0.0
  */
 @Configuration
 @EnableWebSocket

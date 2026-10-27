@@ -6,7 +6,7 @@ import java.util.concurrent.CompletableFuture;
 /**
  * Второй проход, который возвращает слова с временными метками.
  *
- * @version 2.0.0
+ * @version 1.0.0
  */
 public interface DetailedTranscriber extends Transcriber {
 

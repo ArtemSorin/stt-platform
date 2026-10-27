@@ -1,5 +1,6 @@
 server:
-  port: 8081
+  address: ${STT_BIND_ADDRESS:127.0.0.1}
+  port: 8080
 
 spring:
   application:
@@ -8,12 +9,12 @@ spring:
 vosk:
   # Папка с распакованной моделью (внутри am/, conf/, graph/, ivector/ ...). Скачать: download-model.ps1 / .sh
   # Для быстрого отклика можно взять vosk-model-small-ru-0.22 (~45 МБ)
-  model-path: ${VOSK_MODEL_PATH:./models/vosk-model-ru-0.42}
+  model-path: ${VOSK_MODEL_PATH:./stt-service/models/vosk-model-ru-0.42}
   sample-rate: 16000
 
 whisper:
   # Адрес Python-сервера Whisper (whisper/whisper_server.py). Пусто — второй проход выключен.
-  url: ${WHISPER_URL:http://127.0.0.1:9000}
+  url: ${WHISPER_URL:}
   # true — stt-service сам запустит whisper_server.py и остановит его при выходе
   autostart: ${WHISPER_AUTOSTART:false}
   python: ${WHISPER_PYTHON:python}
@@ -23,3 +24,23 @@ whisper:
   compute-type: ${WHISPER_COMPUTE_TYPE:int8}
   cpu-threads: 2
   startup-timeout-seconds: 600
+
+diarization:
+  nemo-lib: ${NEMOTRON_HOME:C:/Users/Public/NemotronTest}/runtime/bin/nemo_speech_asr_c.dll
+  nemo-model: ${NEMOTRON_HOME:C:/Users/Public/NemotronTest}/model.gguf
+  speaker-model: ${NEMOTRON_HOME:C:/Users/Public/NemotronTest}/speaker_embedding_model.onnx
+  output-dir: ${DIARIZATION_OUTPUT:./runs/diarization}
+  preset: v3-streaming
+  num-threads: 4
+  queue-chunks: 32
+  threshold: 0.60
+  settle-seconds: 0.64
+
+gateway:
+  stt-url: ${STT_URL:http://127.0.0.1:8080}
+  analytics-url: ${ANALYTICS_URL:http://127.0.0.1:8083}
+  output-dir: ${GATEWAY_OUTPUT:./runs/integrated}
+
+integration:
+  end-silence-ms: ${END_SILENCE_MS:450}
+  no-speech-timeout-ms: ${NO_SPEECH_TIMEOUT_MS:15000}

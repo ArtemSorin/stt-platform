@@ -1,0 +1,9 @@
+extends:
+  - recommended
+rules:
+  # Репозиторий не задаёт лицензию в метаданных OpenAPI.
+  info-license: off
+  # У локальных маршрутов намеренно нет HTTP-аутентификации; доступ ограничен loopback.
+  operation-4xx-response: off
+  # Корневой маршрут корректно возвращает 302 вместо 2xx.
+  operation-2xx-response: off

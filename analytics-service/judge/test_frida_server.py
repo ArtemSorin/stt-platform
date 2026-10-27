@@ -7,6 +7,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+from argparse import Namespace
 from http.server import ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -56,6 +57,12 @@ REQUEST = {"state": "текст", "questions": {"q": {"type": "noul", "instructi
 
 
 class ServerTest(unittest.TestCase):
+    def test_fake_backend_works_without_optional_model_package(self):
+        judge = fs.load_judge(Namespace(backend="fake"))
+        response = judge(REQUEST)
+        self.assertEqual(judge.backend, "fake")
+        self.assertEqual(response["answers"]["q"], {"type": "noul", "noul": 0.5})
+
     def test_judge_status_and_health(self):
         server, service, url = serve(FakeJudge())
         try:

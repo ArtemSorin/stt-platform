@@ -1,4 +1,5 @@
 server:
+  address: ${ANALYTICS_BIND_ADDRESS:127.0.0.1}
   port: 8083
 
 spring:
@@ -6,20 +7,17 @@ spring:
     name: analytics-service
 
 interview:
-  # Микросервис распознавания речи (Vosk, а также Whisper для второго прохода)
-  stt-url: ${STT_URL:http://127.0.0.1:8081}
-  stt-flush-timeout-ms: 1500
   whisper-enabled: ${WHISPER_ENABLED:true}
   whisper-wait-ms: 25000
 
   # Сколько тишины считать концом ответа, мс. Главный рычаг задержки решения.
-  end-silence-ms: 450          # «мягкий» конец: распознавание дожимается (flush) и готовится решение
+  end-silence-ms: ${END_SILENCE_MS:450} # основной VAD находится в stt-service
   next-extra-ms: 150           # ответ достаточный → следующий вопрос: ≈ 0,6 с
   other-next-extra-ms: 600     # «не знаю», нет ответа, не по теме → следующий вопрос: ≈ 1,05 с
   follow-up-extra-ms: 1500     # ответ неполный → уточняющий вопрос: ≈ 2 с (человек чаще всего думает)
   grace-ms: 1000               # окно отмены: после решения микрофон ещё открыт
   max-follow-ups: 2
-  no-speech-timeout-ms: 15000
+  no-speech-timeout-ms: ${NO_SPEECH_TIMEOUT_MS:15000}
   weak-coverage: 0.08
 
   # Excel-отчёт по окончании интервью
@@ -54,6 +52,8 @@ interview:
       autostart: ${JUDGE_AUTOSTART:false}
       python: ${JUDGE_PYTHON:python}
       script: judge/frida_server.py
-      backend: ${JUDGE_BACKEND:torch}   # torch | onnx | heuristic (заглушка БЕЗ модели, для проверки портов)
+      backend: ${JUDGE_BACKEND:torch}   # torch | onnx | heuristic | fake (тестовые заглушки)
       model: ${JUDGE_MODEL:ai-forever/FRIDA-Decisions}
       device: ${JUDGE_DEVICE:}          # cuda | cpu; пусто — автоматически
+  events:
+    token: ${INTERVIEW_EVENTS_TOKEN:}

@@ -14,7 +14,7 @@ import java.time.Duration;
 /**
  * HTTP-клиент Python-сервера Whisper ({@code /transcribe}, {@code /transcribe-json}).
  *
- * @version 2.0.0
+ * @version 1.0.0
  */
 @Component
 public class WhisperClient {

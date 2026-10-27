@@ -6,7 +6,7 @@ import java.util.List;
  * Потоковый распознаватель речи для одного интервью. В платформе это клиент микросервиса
  * {@code stt-service} (Vosk), в тестах — заглушка со сценарием.
  *
- * @version 2.0.0
+ * @version 1.0.0
  */
 public interface SpeechEngine extends AutoCloseable {
 

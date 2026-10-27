@@ -29,7 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *                   {"type":"stats","rtf":0.42} — доля времени звука, которую занимает распознавание (каждые 20 кадров)
  * </pre>
  *
- * @version 2.0.0
+ * @version 1.0.0
  */
 @Component
 public class SttWebSocketHandler extends AbstractWebSocketHandler {
