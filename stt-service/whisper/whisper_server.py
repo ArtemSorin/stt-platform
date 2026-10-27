@@ -24,6 +24,7 @@ ARGS = None
 
 
 def pcm_to_float(body: bytes):
+    """Преобразует PCM16 little-endian mono в массив float32 диапазона [-1, 1]."""
     import numpy as np
 
     if len(body) % 2:
@@ -32,6 +33,10 @@ def pcm_to_float(body: bytes):
 
 
 def transcribe(body: bytes):
+    """Распознаёт сырой PCM16 и возвращает текст со словами и временами в секундах.
+
+    Для пустого аудио возвращает пустой текст и список слов; вход без WAV-заголовка.
+    """
     if ARGS.backend == "fake":
         sample_count = len(body) // 2
         if sample_count == 0:

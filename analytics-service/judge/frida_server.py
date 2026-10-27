@@ -48,6 +48,7 @@ class PriorityGate:
         self._high_waiting = 0
 
     def acquire(self, high: bool):
+        """Захватывает слот модели; высокий приоритет обходит очередь низкого."""
         with self._cond:
             if high:
                 self._high_waiting += 1
@@ -62,12 +63,15 @@ class PriorityGate:
             self._busy = True
 
     def release(self):
+        """Освобождает слот модели и будит ожидающие запросы."""
         with self._cond:
             self._busy = False
             self._cond.notify_all()
 
 
 class Service:
+    """Сериализует вызовы модели, учитывает приоритеты и собирает метрики HTTP-сервера."""
+
     def __init__(self, judge, backend: str, model: str):
         self.judge, self.backend, self.model = judge, backend, model
         self.gate = PriorityGate()
@@ -79,6 +83,7 @@ class Service:
         self._warned = set()
 
     def run(self, request: dict, high: bool) -> dict:
+        """Оценивает один запрос и возвращает ответ backend без изменения его формата."""
         self.gate.acquire(high)
         started = time.perf_counter()
         try:
@@ -98,6 +103,7 @@ class Service:
         return response
 
     def run_batch(self, requests: list, high: bool) -> list:
+        """Оценивает список запросов и сохраняет порядок результатов."""
         self.gate.acquire(high)
         try:
             return self.judge.judge_batch(requests)
@@ -105,6 +111,7 @@ class Service:
             self.gate.release()
 
     def status(self) -> dict:
+        """Возвращает backend, модель, счётчики и задержки обработки."""
         with self._lock:
             recent = sorted(self.recent)
             p95 = recent[int(len(recent) * 0.95) - 1] if recent else None
@@ -148,6 +155,7 @@ class Service:
 
 
 def make_handler(service: Service):
+    """Создаёт HTTP-обработчик, связанный с экземпляром сервиса оценки."""
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         # заголовки и тело — одним пакетом, без Nagle: иначе каждый ответ стоит лишние ~40 мс (delayed ACK клиента)
@@ -237,6 +245,7 @@ class FakeJudge:
 
 
 def load_judge(args):
+    """Загружает выбранный backend FRIDA или тестовую заглушку."""
     if args.backend == "fake":
         return FakeJudge()
     if args.backend == "heuristic":
@@ -253,6 +262,7 @@ def load_judge(args):
 
 
 def main(argv=None):
+    """Разбирает параметры процесса, загружает backend и запускает HTTP-сервер."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9100)
