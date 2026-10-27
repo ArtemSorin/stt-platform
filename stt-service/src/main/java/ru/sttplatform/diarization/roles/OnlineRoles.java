@@ -35,6 +35,11 @@ public final class OnlineRoles {
     private final List<Interviewer> interviewers = new ArrayList<>();
     private final Map<String, Map<String, Double>> sourceVotes = new LinkedHashMap<>();
 
+    /** Создаёт классификатор ролей по эталону кандидата и извлекателю эмбеддингов.
+     * @param candidate эмбеддинг голоса кандидата
+     * @param extractor извлекатель эмбеддингов CAM++
+     * @param threshold порог сходства с эталоном
+     */
     public OnlineRoles(float[] candidate, SpeakerEmbeddingExtractor extractor, double threshold) {
         this.candidate = candidate;
         this.extractor = extractor;
@@ -57,6 +62,13 @@ public final class OnlineRoles {
                 .merge(label, duration, Double::sum);
     }
 
+    /** Формирует предварительную подсказку о роли без фиксации решения.
+     * @param audio аудио общего потока
+     * @param start начало проверяемого интервала в секундах
+     * @param end конец проверяемого интервала в секундах
+     * @param source идентификатор источника сегмента
+     * @return поля предварительной классификации для события таймлайна
+     */
     public Map<String, Object> preview(float[] audio, double start, double end, String source) {
         String label = stableRole(source);
         String basis;
@@ -98,6 +110,13 @@ public final class OnlineRoles {
                 "interviewer_similarity", bestScore == null ? null : Json.round(bestScore, 4));
     }
 
+    /** Подтверждает роль по голосовому эталону и сегменту диаризации.
+     * @param audio аудио общего потока
+     * @param start начало проверяемого интервала в секундах
+     * @param end конец проверяемого интервала в секундах
+     * @param source идентификатор источника сегмента
+     * @return поля подтверждённой классификации для таймлайна и потока кандидата
+     */
     public Map<String, Object> classify(float[] audio, double start, double end, String source) {
         float[] embedding = Embeddings.embedding(extractor, audio, start, end, .08);
         Double candidateScore = embedding == null ? null : Embeddings.dot(candidate, embedding);

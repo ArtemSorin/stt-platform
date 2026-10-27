@@ -1,0 +1,46 @@
+@startuml stt-platform-c4
+!include <C4/C4_Container>
+
+title stt-platform — C4 Container
+LAYOUT_LEFT_RIGHT()
+HIDE_PERSON_SPRITE()
+HIDE_STEREOTYPE()
+
+Person(candidate, "Кандидат", "Проходит интервью")
+Container_Ext(browser, "Браузер", "HTML / JavaScript", "Захват эталона и PCM16; /test.html — тестовый режим без диаризации")
+
+System_Boundary(platform, "stt-platform · локальная машина") {
+    Container(stt, "STT + диаризация", "Spring Boot 3.3.5 · Java 17 · :8080", "Vosk и Nemotron/CAM++; браузерное API. В основном режиме обязательны эталон и диаризация.")
+    Container(analytics, "Аналитика", "Spring Boot 3.3.5 · Java 17 · :8083", "Вопросы, решения, оценка FRIDA и XLSX-отчёты.")
+    Container(whisper, "Whisper helper · optional", "Python · :9000", "Локальное уточнение текста faster-whisper small.")
+    Container(frida, "FRIDA helper · optional", "Python · :9100", "Семантическая оценка; локальная модель не проверялась.")
+    ContainerDb(models, "Артефакты моделей", "Файлы вне Git", "Vosk, Nemotron, CAM++, Whisper и FRIDA (если установлена).")
+    ContainerDb(reports, "XLSX-отчёты", "Локальные файлы", "Создаются аналитикой; STT проксирует скачивание в браузер.")
+}
+
+Rel_R(candidate, browser, "интервью")
+Rel_R(browser, stt, "HTTP API · PCM16 mono 16 кГц")
+Rel_R(stt, analytics, "внутренний /ws/interview-events · JSON в обе стороны")
+Rel_D(stt, whisper, "HTTP · PCM буфера ответа")
+Rel_D(analytics, frida, "HTTP · JSON оценки")
+Rel_D(analytics, reports, "сохраняет отчёт")
+Rel_D(stt, models, "Vosk / Nemotron / CAM++")
+Rel_D(whisper, models, "faster-whisper")
+Rel_D(frida, models, "FRIDA, если установлена")
+
+note bottom of models
+  Версии и подтверждённые снимки:
+  Vosk vosk-model-ru-0.42 (по умолчанию); vosk-model-small-ru-0.22 (альтернатива)
+  Nemotron-3-Diarization Q8_0 · ревизия f667ed73…
+  CAM++ speech_campplus_sv_zh_en_16k-common_advanced · SHA-256 aa3cfc16…
+  Whisper small · Systran/faster-whisper-small@536b0662…
+  FRIDA ai-forever/FRIDA-Decisions@main · загрузка не закреплена; тестировался fake backend
+  Полные хеши и оговорки: docs/models.md
+end note
+
+note bottom of platform
+  common — Java/Maven-библиотека 1.0.0, включается в сервисы при сборке и отдельно не запускается.
+  /test.html явно считает все кадры речью кандидата и пропускает запись эталона и диаризацию.
+end note
+
+@enduml

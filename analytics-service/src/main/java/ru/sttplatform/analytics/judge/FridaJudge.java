@@ -66,16 +66,27 @@ public final class FridaJudge implements AnswerJudge {
         this.endpoint = URI.create(base + ("vllm".equals(props.protocol()) ? "/pooling" : "/judge"));
     }
 
+    /** Проверяет, доступна ли модель для нового запроса.
+     * @return {@code true}, если оценивание включено и временная блокировка завершена
+     */
     @Override
     public boolean ready() {
         return props.enabled() && System.currentTimeMillis() >= brokenUntilMs.get();
     }
 
+    /** Запускает приоритетное решение по ответу кандидата.
+     * @param input контекст вопроса и подтверждённого ответа
+     * @return будущее с разобранным решением модели
+     */
     @Override
     public CompletableFuture<Verdict> decide(JudgeInput input) {
         return run("d", input, prompts.decisionRequest(input), "high", props.requestTimeoutMs());
     }
 
+    /** Запускает предварительное решение, если фоновая оценка не занята.
+     * @param input текущий контекст ответа
+     * @return будущее с предварительным результатом либо {@code null}, если запрос пропущен
+     */
     @Override
     public CompletableFuture<Verdict> preview(JudgeInput input) {
         if (!props.previewEnabled() || !ready() || inFlight.get() > 0) {
@@ -85,6 +96,10 @@ public final class FridaJudge implements AnswerJudge {
         return run("d", input, prompts.decisionRequest(input), "high", props.requestTimeoutMs());
     }
 
+    /** Ставит итоговую оценку в очередь низкого приоритета.
+     * @param input полный контекст интервью для отчёта
+     * @return будущее с результатами оценивания
+     */
     @Override
     public CompletableFuture<Verdict> score(JudgeInput input) {
         return run("s", input, prompts.scoringRequest(input), "low", props.scoreTimeoutMs());

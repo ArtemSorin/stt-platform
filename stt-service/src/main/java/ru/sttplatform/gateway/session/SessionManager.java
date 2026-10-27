@@ -37,7 +37,9 @@ public class SessionManager {
     private static final Logger log = LoggerFactory.getLogger(SessionManager.class);
     private static final Set<String> TERMINAL = Set.of("finished", "error");
 
-    /** Состояние интервью на стороне STT-сервиса. */
+    /** Состояние интервью на стороне STT-сервиса.
+     * @version 1.0.0
+     */
     private static final class Active {
         final String id;
         final boolean testMode;
@@ -101,7 +103,12 @@ public class SessionManager {
         return session.status(session.id());
     }
 
-    /** Запускает отдельный тестовый режим, в котором весь микрофонный звук считается речью кандидата. */
+    /** Запускает отдельный тестовый режим без диаризации.
+     * @param candidate имя кандидата для отчёта
+     * @param whisperEnabled включено ли уточнение ответа через Whisper
+     * @return состояние новой тестовой сессии
+     * @throws ApiException если другая сессия ещё не завершена или запуск не удался
+     */
     public synchronized Map<String, Object> startTest(String candidate, boolean whisperEnabled) {
         Active previous = current;
         if (previous != null && previous.orchestrator != null && !previous.done)

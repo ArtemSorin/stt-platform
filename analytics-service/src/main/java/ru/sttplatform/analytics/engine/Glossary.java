@@ -21,6 +21,9 @@ public final class Glossary {
     /**
      * Связывает канонический термин с его речевыми вариантами.
      *
+     * @param name каноническое название термина
+     * @param kind тип записи словаря
+     * @param variants варианты написания и произношения
      * @version 1.0.0
      */
     public record Entry(String name, Kind kind, List<String> variants) {}

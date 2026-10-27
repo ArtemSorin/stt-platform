@@ -203,6 +203,13 @@ public final class NemotronStream implements AutoCloseable {
     private Pointer stream;
     private final double frameSeconds;
 
+    /** Открывает нативный поток Nemotron для указанной модели.
+     * @param dll путь к нативной библиотеке Nemotron
+     * @param gguf путь к файлу модели GGUF
+     * @param preset профиль обработки модели
+     * @throws IllegalArgumentException если библиотека или модель отсутствует либо JVM не 64-битная
+     * @throws IllegalStateException если не удалось создать модель или открыть поток
+     */
     public NemotronStream(Path dll, Path gguf, String preset) {
         if (!Files.isRegularFile(dll) || !Files.isRegularFile(gguf))
             throw new IllegalArgumentException("Не найдены библиотека Nemotron или GGUF: " + dll + ", " + gguf);
@@ -294,10 +301,22 @@ public final class NemotronStream implements AutoCloseable {
         throw new IllegalStateException("Nemotron C API, код " + status + ": " + detail);
     }
 
+    /** Передаёт очередной блок моноаудио в поток Nemotron.
+     * @param samples аудиосэмплы с частотой {@link Pcm#RATE}
+     */
     public void push(float[] samples) { check(api.nemo_speech_diar_stream_push_f32(stream, samples, samples.length, Pcm.RATE)); }
+
+    /** Завершает поток и позволяет модели выдать отложенные сегменты. */
     public void finish() { check(api.nemo_speech_diar_stream_finish(stream)); }
+
+    /** Возвращает длительность аудио, уже обработанного моделью.
+     * @return обработанное время в секундах
+     */
     public double processedSeconds() { return api.nemo_speech_diar_frame_count(stream) * frameSeconds; }
 
+    /** Возвращает сегменты говорящих, сформированные потоком.
+     * @return упорядоченные сегменты диаризации
+     */
     public List<Segment> segments() {
         LongByReference count = new LongByReference();
         check(api.nemo_speech_diar_segments(stream, null, null, 0, count));

@@ -54,7 +54,9 @@ public class BrowserApiController {
         this.analyticsUrl = props.analyticsUrl().replaceAll("/+$", "");
     }
 
-    /** Направляет браузер на основной сценарий интервью с записью эталона и диаризацией. */
+    /** Направляет браузер на основной сценарий интервью с записью эталона и диаризацией.
+     * @return перенаправление на страницу основного сценария
+     */
     @GetMapping("/")
     public ResponseEntity<Void> home() {
         return ResponseEntity.status(HttpStatus.FOUND).location(URI.create("/integrated.html")).build();
@@ -86,7 +88,11 @@ public class BrowserApiController {
         return sessions.start();
     }
 
-    /** Запускает изолированный тест аналитики: весь микрофонный звук считается речью кандидата. */
+    /** Запускает тест аналитики без записи эталона и диаризации.
+     * @param request HTTP-запрос с необязательными настройками теста
+     * @return состояние созданной тестовой сессии
+     * @throws IOException если не удалось прочитать тело запроса
+     */
     @PostMapping("/api/test/start")
     public Map<String, Object> startTest(HttpServletRequest request) throws IOException {
         checkOrigin(request);

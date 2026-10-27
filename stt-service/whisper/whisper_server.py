@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Локальный HTTP-сервер Whisper (faster-whisper) для stt-service.
 
-Контракт (см. docs/whisper-openapi.yaml):
+Контракт (см. docs/api/whisper-helper.openapi.yaml):
   GET  /                  -> "ok"
   POST /transcribe        -> текст UTF-8
   POST /transcribe-json   -> {"text": "...", "words": [{"word","start","end","confidence"}]}

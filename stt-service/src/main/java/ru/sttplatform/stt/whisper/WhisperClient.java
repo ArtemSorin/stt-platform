@@ -23,6 +23,7 @@ public class WhisperClient {
      *
      * @param status HTTP-код
      * @param body тело ответа (UTF-8)
+     * @version 1.0.0
      */
     public record Reply(int status, String body) {}
 

@@ -12,16 +12,28 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Map;
 
-/** Проверяет общий секрет до открытия внутреннего WebSocket STT → аналитика. */
+/** Проверяет общий секрет до открытия внутреннего WebSocket STT → аналитика.
+ * @version 1.0.0
+ */
 @Component
 public final class InternalEventsHandshakeInterceptor implements HandshakeInterceptor {
     private final byte[] expectedToken;
 
+    /** Сохраняет общий секрет только для проверки handshake.
+     * @param token секрет из конфигурации сервиса
+     */
     public InternalEventsHandshakeInterceptor(
             @Value("${interview.events.token:${INTERVIEW_EVENTS_TOKEN:}}") String token) {
         expectedToken = token == null ? new byte[0] : token.getBytes(StandardCharsets.UTF_8);
     }
 
+    /** Проверяет общий токен до установки внутреннего WebSocket-соединения.
+     * @param request входящий HTTP-запрос handshake
+     * @param response HTTP-ответ handshake
+     * @param handler WebSocket-обработчик маршрута
+     * @param attributes атрибуты будущей WebSocket-сессии
+     * @return {@code true}, если токен совпал и соединение разрешено
+     */
     @Override
     public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
                                    WebSocketHandler handler, Map<String, Object> attributes) {
@@ -32,6 +44,12 @@ public final class InternalEventsHandshakeInterceptor implements HandshakeInterc
         return accepted;
     }
 
+    /** Завершает handshake без сохранения переданного секрета.
+     * @param request исходный HTTP-запрос
+     * @param response ответ handshake
+     * @param handler WebSocket-обработчик маршрута
+     * @param exception ошибка handshake или {@code null} при успехе
+     */
     @Override
     public void afterHandshake(ServerHttpRequest request, ServerHttpResponse response,
                                WebSocketHandler handler, Exception exception) {

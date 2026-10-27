@@ -26,6 +26,9 @@ public class WebSocketConfig implements WebSocketConfigurer {
         this.sttHandler = sttHandler;
     }
 
+    /** Регистрирует браузерный WebSocket для прямого распознавания STT.
+     * @param registry реестр серверных WebSocket-маршрутов
+     */
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(sttHandler, "/ws/stt").setAllowedOrigins("*");

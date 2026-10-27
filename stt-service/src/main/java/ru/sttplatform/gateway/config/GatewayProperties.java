@@ -5,6 +5,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * Адрес аналитики и каталог результатов браузерного интерфейса.
  *
+ * @param sttUrl адрес браузерного STT-сервиса
  * @param analyticsUrl адрес analytics-service
  * @param outputDir каталог журналов и таймлайна интервью
  * @version 1.0.0

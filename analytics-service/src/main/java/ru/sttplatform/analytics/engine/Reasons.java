@@ -1,6 +1,8 @@
 package ru.sttplatform.analytics.engine;
 
-/** Человекочитаемые причины решений (для Excel-отчёта; на странице есть такой же словарь). */
+/** Человекочитаемые причины решений (для Excel-отчёта; на странице есть такой же словарь).
+ * @version 1.0.0
+ */
 public final class Reasons {
     private Reasons() {}
 

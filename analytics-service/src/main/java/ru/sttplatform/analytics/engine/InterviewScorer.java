@@ -29,7 +29,9 @@ public final class InterviewScorer {
 
     private InterviewScorer() {}
 
-    /** Оценка одного вопроса (по всем попыткам внутри него); значения не округлены. */
+    /** Оценка одного вопроса (по всем попыткам внутри него); значения не округлены.
+     * @version 1.0.0
+     */
     record RunScore(double completeness, double technical, double terminology, double speed, double coverage,
                     int words, int hedge, int answeredAttempts, Set<Integer> glossaryIds, AnswerAnalysis last,
                     Verdict verdict) {}

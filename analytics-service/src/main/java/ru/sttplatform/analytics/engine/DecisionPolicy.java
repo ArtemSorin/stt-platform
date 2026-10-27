@@ -9,6 +9,9 @@ public final class DecisionPolicy {
     /**
      * Хранит действие по ответу и причину выбора.
      *
+     * @param followUp нужно ли задать уточняющий вопрос
+     * @param reason причина принятого решения
+     * @param followUpIndex индекс уточнения или {@code -1}, если оно не выбрано
      * @version 1.0.0
      */
     public record Decision(boolean followUp, String reason, int followUpIndex) {}

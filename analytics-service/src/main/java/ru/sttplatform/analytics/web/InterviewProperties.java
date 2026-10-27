@@ -12,6 +12,21 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *       {@code grace-ms} — тайминги решения (см. {@code LiveInterview}).</li>
  * </ul>
  *
+ * @param questionsPath путь к внешнему файлу банка вопросов
+ * @param glossaryPath путь к внешнему словарю терминов
+ * @param spokenPath путь к файлу настроек произношения
+ * @param maxFollowUps максимум уточнений на один вопрос
+ * @param endSilenceMs длительность тишины для фиксации конца ответа
+ * @param noSpeechTimeoutMs время ожидания речи после вопроса
+ * @param weakCoverage порог слабого покрытия ответа
+ * @param whisperEnabled разрешён ли второй проход Whisper в STT
+ * @param whisperWaitMs время ожидания уточнённого текста
+ * @param reportsDir каталог файлов отчётов
+ * @param reportDownload разрешено ли скачивание отчётов
+ * @param nextExtraMs дополнительная задержка перед следующим вопросом
+ * @param otherNextExtraMs дополнительная задержка для отдельного сценария перехода
+ * @param followUpExtraMs задержка перед уточняющим вопросом
+ * @param graceMs окно, в котором продолжение речи отменяет предварительное решение
  * @version 1.0.0
  */
 @ConfigurationProperties(prefix = "interview")

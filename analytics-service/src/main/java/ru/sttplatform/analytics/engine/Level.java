@@ -1,6 +1,8 @@
 package ru.sttplatform.analytics.engine;
 
-/** Уровень вопроса. sufficientCoverage — доля ключевых понятий эталона, после которой ответ считается достаточным. */
+/** Уровень вопроса. sufficientCoverage — доля ключевых понятий эталона, после которой ответ считается достаточным.
+ * @version 1.0.0
+ */
 public enum Level {
     INTERN("Стажёр", 0.40),
     JUNIOR("Junior", 0.45),

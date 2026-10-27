@@ -148,7 +148,12 @@ public final class Tokenizer {
         return h;
     }
 
-    /** Ключ n-граммы из хешей токенов (для поиска фраз вида «сборщик мусора»). */
+    /** Строит ключ n-граммы из хешей токенов для поиска фраз.
+     * @param h хеши токенов
+     * @param from индекс первого токена
+     * @param len длина последовательности
+     * @return хеш выбранной последовательности
+     */
     public static long ngramKey(long[] h, int from, int len) {
         if (len == 1) return h[from];
         long k = 0x9E3779B97F4A7C15L ^ len;

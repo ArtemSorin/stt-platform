@@ -63,7 +63,13 @@ public final class WsPeer implements WebSocket.Listener {
         return connect(url, Map.of(), handler, onClosed);
     }
 
-    /** Подключается с HTTP-заголовками handshake, например для закрытого канала сервисов. */
+    /** Подключается к WebSocket с заголовками HTTP handshake.
+     * @param url адрес WebSocket-сервера
+     * @param headers заголовки соединения, например токен внутреннего канала
+     * @param handler обработчик входящих JSON-сообщений
+     * @param onClosed вызывается при закрытии или ошибке соединения; может быть {@code null}
+     * @return подключённый клиент
+     */
     public static WsPeer connect(String url, Map<String, String> headers,
                                  Consumer<JsonNode> handler, Runnable onClosed) {
         WsPeer peer = new WsPeer(handler, onClosed);

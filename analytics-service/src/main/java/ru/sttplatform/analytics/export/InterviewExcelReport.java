@@ -320,6 +320,9 @@ public final class InterviewExcelReport {
         return "'" + Q_SHEET + "'!$" + XlsxSheet.col(col) + "$2:$" + XlsxSheet.col(col) + "$" + last;
     }
 
+    /** Агрегированные показатели ответов по теме для сводного листа отчёта.
+     * @version 1.0.0
+     */
     private record TopicStat(String topic, int count, double coverage, double total) {}
 
     private static List<TopicStat> topicStats(InterviewDetails d, double[] totals) {

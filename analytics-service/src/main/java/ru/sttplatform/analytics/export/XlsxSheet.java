@@ -4,13 +4,24 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeMap;
 
-/** Лист книги. Индексы строк и столбцов — с нуля. */
+/** Лист книги. Индексы строк и столбцов — с нуля.
+ * @version 1.0.0
+ */
 public final class XlsxSheet {
 
+    /** Значение ячейки и параметры его записи в XML листа.
+     * @version 1.0.0
+     */
     record Cell(Object value, String formula, int style) {}
 
+    /** Границы объединённого диапазона ячеек.
+     * @version 1.0.0
+     */
     private record Merge(int r1, int c1, int r2, int c2) {}
 
+    /** Условное форматирование и XML-описание его диапазона.
+     * @version 1.0.0
+     */
     private record Cf(String sqref, String xml) {}
 
     final String name;
@@ -133,13 +144,28 @@ public final class XlsxSheet {
         return this;
     }
 
-    /** Формула с кэшированным значением (его покажут и программы, которые не пересчитывают формулы). */
+    /** Записывает формулу и кэшированное значение для программ без пересчёта формул.
+     * @param r индекс строки
+     * @param c индекс столбца
+     * @param formula формула без знака равенства
+     * @param cached значение, показываемое до пересчёта формулы
+     * @param style стиль ячейки
+     * @return этот лист для цепочки настроек
+     */
     public XlsxSheet formula(int r, int c, String formula, Object cached, XlsxStyle style) {
         rows.computeIfAbsent(r, k -> new TreeMap<>()).put(c, new Cell(cached, formula, book.style(style)));
         return this;
     }
 
-    /** Объединённая область: стиль применяется ко всем ячейкам (чтобы работали границы и заливка). */
+    /** Объединяет область ячеек и применяет стиль ко всему диапазону.
+     * @param r1 первая строка диапазона
+     * @param c1 первый столбец диапазона
+     * @param r2 последняя строка диапазона
+     * @param c2 последний столбец диапазона
+     * @param value значение верхней левой ячейки
+     * @param style стиль всех ячеек диапазона
+     * @return этот лист для цепочки настроек
+     */
     public XlsxSheet merge(int r1, int c1, int r2, int c2, Object value, XlsxStyle style) {
         for (int r = r1; r <= r2; r++) {
             for (int c = c1; c <= c2; c++) {
@@ -168,7 +194,16 @@ public final class XlsxSheet {
         return this;
     }
 
-    /** Трёхцветная шкала красный → жёлтый → зелёный (0 / mid / max). */
+    /** Добавляет условную шкалу от красного через жёлтый к зелёному.
+     * @param r1 первая строка диапазона
+     * @param c1 первый столбец диапазона
+     * @param r2 последняя строка диапазона
+     * @param c2 последний столбец диапазона
+     * @param min нижняя граница шкалы
+     * @param mid средняя граница шкалы
+     * @param max верхняя граница шкалы
+     * @return этот лист для цепочки настроек
+     */
     public XlsxSheet colorScale(int r1, int c1, int r2, int c2, double min, double mid, double max) {
         String sq = ref(r1, c1, r2, c2);
         String xml = "<conditionalFormatting sqref=\"" + sq + "\"><cfRule type=\"colorScale\" priority=\"" + (priority++)
@@ -179,7 +214,16 @@ public final class XlsxSheet {
         return this;
     }
 
-    /** Подкраска ячеек, равных тексту (например «Да» → зелёная заливка). */
+    /** Добавляет заливку ячейкам диапазона, равным заданному тексту.
+     * @param r1 первая строка диапазона
+     * @param c1 первый столбец диапазона
+     * @param r2 последняя строка диапазона
+     * @param c2 последний столбец диапазона
+     * @param text искомое значение
+     * @param fontRgb цвет текста в формате RGB
+     * @param fillRgb цвет заливки в формате RGB
+     * @return этот лист для цепочки настроек
+     */
     public XlsxSheet cellEquals(int r1, int c1, int r2, int c2, String text, String fontRgb, String fillRgb) {
         int dxf = book.dxf(fontRgb, fillRgb);
         String sq = ref(r1, c1, r2, c2);
@@ -189,7 +233,14 @@ public final class XlsxSheet {
         return this;
     }
 
-    /** Диаграмма; якорь — ячейки левого верхнего и правого нижнего углов (включительно). */
+    /** Добавляет диаграмму и задаёт её область на листе.
+     * @param chart диаграмма и ссылки на данные
+     * @param fromRow индекс строки верхнего левого угла
+     * @param fromCol индекс столбца верхнего левого угла
+     * @param toRow индекс строки нижнего правого угла
+     * @param toCol индекс столбца нижнего правого угла
+     * @return этот лист для цепочки настроек
+     */
     public XlsxSheet chart(XlsxChart chart, int fromRow, int fromCol, int toRow, int toCol) {
         charts.add(chart);
         chartAnchors.add(new int[]{fromRow, fromCol, toRow, toCol});
@@ -239,7 +290,13 @@ public final class XlsxSheet {
         return (r1 == r2 && c1 == c2) ? addr(r1, c1) : addr(r1, c1) + ":" + addr(r2, c2);
     }
 
-    /** Абсолютная ссылка вида 'Лист'!$A$2:$A$9 — для диаграмм и определённых имён. */
+    /** Формирует абсолютную ссылку на диапазон ячеек текущего листа.
+     * @param r1 первая строка диапазона
+     * @param c1 первый столбец диапазона
+     * @param r2 последняя строка диапазона
+     * @param c2 последний столбец диапазона
+     * @return ссылка Excel вида {@code 'Лист'!$A$2:$A$9}
+     */
     public String absRef(int r1, int c1, int r2, int c2) {
         return "'" + name.replace("'", "''") + "'!$" + col(c1) + "$" + (r1 + 1) + ":$" + col(c2) + "$" + (r2 + 1);
     }

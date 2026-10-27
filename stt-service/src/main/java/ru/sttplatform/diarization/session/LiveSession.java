@@ -27,12 +27,24 @@ import java.util.Map;
 public final class LiveSession implements AutoCloseable {
     /** Счётчики захвата и причина остановки.
      *
+     * @param capturedSamples число принятых аудиосэмплов
+     * @param capacity ёмкость очереди в аудиокадрах
+     * @param maxDepth максимальная глубина очереди
+     * @param overflowCount число переполнений очереди
+     * @param droppedChunks число потерянных кадров
+     * @param droppedSamples число потерянных сэмплов
+     * @param stopReason причина остановки захвата
+     * @param error описание ошибки захвата или {@code null}
      * @version 1.0.0
      */
     public record Capture(long capturedSamples, int capacity, long maxDepth, long overflowCount,
                    long droppedChunks, long droppedSamples, String stopReason, String error) {}
     /** Результат обработки блока для интерфейса и моста интеграции.
      *
+     * @param role последняя подтверждённая роль
+     * @param audioSeconds длительность обработанного аудио
+     * @param segments опубликованные сегменты таймлайна
+     * @param activeSegments предварительные сегменты, ожидающие подтверждения
      * @version 1.0.0
      */
     public record Update(String role, double audioSeconds, List<Map<String, Object>> segments,
@@ -54,6 +66,26 @@ public final class LiveSession implements AutoCloseable {
     private Capture capture;
     private boolean finished;
 
+    /** Открывает файловую и модельную часть диаризационной сессии.
+     * @param diarizer потоковая модель диаризации
+     * @param extractor извлекатель эмбеддингов CAM++
+     * @param candidate эталонный эмбеддинг кандидата
+     * @param threshold порог сходства голоса с эталоном
+     * @param outputDir каталог файлов сессии
+     * @param source источник аудио
+     * @param mode режим обработки
+     * @param enrollmentSource источник эталонной записи
+     * @param micName имя микрофона
+     * @param inputRate частота входного аудио
+     * @param inputChannels число каналов входного аудио
+     * @param enrollmentSeconds длительность эталонной записи
+     * @param chunkSeconds длительность блока диаризации
+     * @param settleSeconds время ожидания стабилизации роли
+     * @param startupSeconds время загрузки модели
+     * @param preset профиль модели
+     * @param initial начальные метрики захвата аудио
+     * @throws Exception если не удалось создать каталог, журнал или начальную сводку
+     */
     public LiveSession(NemotronStream diarizer, SpeakerEmbeddingExtractor extractor, float[] candidate,
                 double threshold, Path outputDir, String source, String mode, String enrollmentSource, String micName,
                 int inputRate, int inputChannels, double enrollmentSeconds, double chunkSeconds,
@@ -86,9 +118,24 @@ public final class LiveSession implements AutoCloseable {
     }
 
     private double elapsed() { return (System.nanoTime() - runStart) / 1e9; }
+    /** Возвращает роль последнего подтверждённого сегмента.
+     * @return {@code candidate}, {@code interviewer} или {@code unknown}
+     */
     public String currentRole() { return currentRole; }
+
+    /** Возвращает каталог артефактов текущей сессии.
+     * @return путь к каталогу вывода
+     */
     public Path outputDir() { return outputDir; }
+
+    /** Проверяет, завершена ли обработка аудио.
+     * @return {@code true}, если сессия уже завершена
+     */
     public boolean isFinished() { return finished; }
+
+    /** Возвращает копию уже опубликованных сегментов таймлайна.
+     * @return независимый список сегментов сессии
+     */
     public List<Map<String, Object>> allSegments() { return new ArrayList<>(emitted); }
 
     private Map<String, Object> enrollment() {
@@ -144,6 +191,13 @@ public final class LiveSession implements AutoCloseable {
         return result;
     }
 
+    /** Обрабатывает упорядоченный кадр аудио и публикует новые сегменты.
+     * @param chunk кадр с общей позицией в аудиошкале
+     * @param queueDepth текущая глубина очереди захвата
+     * @param metrics метрики захвата и сведения об ошибках очереди
+     * @return обновление таймлайна и состояния роли
+     * @throws Exception при ошибке модели диаризации или записи артефакта
+     */
     public Update process(AudioChunk chunk, int queueDepth, Capture metrics) throws Exception {
         if (finished) throw new IllegalStateException("Сессия уже завершена.");
         if (chunk.firstSample() != audio.totalSamples()) throw new IllegalStateException("Нарушен порядок чанков микрофона.");
@@ -180,6 +234,12 @@ public final class LiveSession implements AutoCloseable {
         return new Update(currentRole, audioEnd, newRows, active);
     }
 
+    /** Завершает диаризацию, сохраняет сводку сессии и закрывает ресурсы.
+     * @param metrics итоговые метрики захвата
+     * @param success признак успешного завершения сценария
+     * @return итоговая сводка сессии
+     * @throws Exception при ошибке финализации модели или записи файлов
+     */
     public Map<String, Object> finish(Capture metrics, boolean success) throws Exception {
         if (finished) return summary(0, success);
         capture = metrics;

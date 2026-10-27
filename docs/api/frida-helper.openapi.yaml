@@ -1,0 +1,249 @@
+openapi: 3.1.0
+info:
+  title: Локальный HTTP-помощник FRIDA-Decisions
+  version: 1.0.0
+  description: >-
+    HTTP API локального Python-процесса оценки. Аналитика использует его для решения
+    по ответу и фоновой оценки отчёта. По умолчанию процесс слушает 127.0.0.1:9100;
+    HTTP-аутентификация не предусмотрена.
+servers:
+  - url: http://127.0.0.1:9100
+    description: Локальный процесс разработчика
+security: []
+tags:
+  - name: Модель
+    description: Оценка и диагностика локального backend.
+paths:
+  /:
+    get:
+      operationId: fridaHealth
+      summary: Проверить доступность процесса
+      responses:
+        '200':
+          description: Процесс отвечает
+          content:
+            text/plain:
+              schema:
+                type: string
+                const: ok
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /status:
+    get:
+      tags: [Модель]
+      operationId: getFridaStatus
+      summary: Получить состояние модели и счётчики запросов
+      responses:
+        '200':
+          description: Настроенный backend, модель и статистика обработки
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /judge:
+    post:
+      tags: [Модель]
+      operationId: judgeAnswer
+      summary: Оценить один запрос
+      parameters:
+        - $ref: '#/components/parameters/Priority'
+      requestBody:
+        $ref: '#/components/requestBodies/JudgeRequest'
+      responses:
+        '200':
+          description: Результат для заданных вопросов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JudgeResponse'
+        '400':
+          $ref: '#/components/responses/RequestError'
+        '500':
+          $ref: '#/components/responses/ServerError'
+        default:
+          $ref: '#/components/responses/RequestError'
+  /judge-batch:
+    post:
+      tags: [Модель]
+      operationId: judgeBatch
+      summary: Оценить список запросов
+      parameters:
+        - $ref: '#/components/parameters/Priority'
+      requestBody:
+        required: true
+        description: Массив запросов того же формата, что и для /judge.
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/JudgeRequest'
+      responses:
+        '200':
+          description: Массив ответов в том же порядке, что и запросы
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/JudgeResponse'
+        '400':
+          $ref: '#/components/responses/RequestError'
+        '500':
+          $ref: '#/components/responses/ServerError'
+        default:
+          $ref: '#/components/responses/RequestError'
+  /check:
+    post:
+      tags: [Модель]
+      operationId: checkPromptSize
+      summary: Проверить размер состояния и инструкций без запуска модели
+      requestBody:
+        $ref: '#/components/requestBodies/JudgeRequest'
+      responses:
+        '200':
+          description: Число токенов и перечень инструкций сверх лимита
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckResult'
+        '400':
+          $ref: '#/components/responses/RequestError'
+        '500':
+          $ref: '#/components/responses/ServerError'
+        default:
+          $ref: '#/components/responses/RequestError'
+components:
+  parameters:
+    Priority:
+      name: X-Priority
+      in: header
+      required: false
+      description: low ставит фоновую оценку после ожидающих решений; любое другое значение обрабатывается как high.
+      schema:
+        type: string
+        enum: [high, low]
+        default: high
+  requestBodies:
+    JudgeRequest:
+      required: true
+      description: Формат запроса библиотеки FRIDA-Decisions; вопросы имеют тип noul, score или ranking.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/JudgeRequest'
+          example:
+            state: "Вопрос: Что такое JVM? Ответ кандидата: виртуальная машина для исполнения байткода."
+            questions:
+              fact_1:
+                type: noul
+                instructions: "Кандидат объяснил, что JVM исполняет байткод?"
+              completeness:
+                type: score
+                instructions: "Оцени полноту ответа."
+                criteria: [Нет ответа, Минимальный, Частичный, Хороший, Полный]
+  responses:
+    NotFound:
+      description: Неизвестный путь; тело содержит объект error с type и message
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    RequestError:
+      description: Некорректный JSON или ошибка проверки запроса библиотекой модели
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ServerError:
+      description: Внутренняя ошибка backend; тело содержит error типа internal
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+  schemas:
+    JudgeRequest:
+      type: object
+      properties:
+        state:
+          type: string
+          description: Текстовый контекст интервью для модели.
+        questions:
+          type: object
+          description: Именованные задания FRIDA-Decisions.
+          additionalProperties:
+            $ref: '#/components/schemas/QuestionTask'
+      required: [state, questions]
+      additionalProperties: false
+    QuestionTask:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [noul, score, ranking]
+        instructions:
+          type: string
+        criteria:
+          oneOf:
+            - type: array
+              items: {type: string}
+            - type: object
+              additionalProperties: {type: string}
+      required: [type, instructions]
+      additionalProperties: true
+    JudgeResponse:
+      type: object
+      description: Формат ответа FRIDA-Decisions; детализация answers зависит от типа задания.
+      properties:
+        model:
+          type: string
+        answers:
+          type: object
+          additionalProperties: true
+        margins:
+          type: object
+          additionalProperties: true
+        usage:
+          type: object
+          additionalProperties: true
+      required: [answers]
+      additionalProperties: true
+    Status:
+      type: object
+      properties:
+        backend: {type: string}
+        model: {type: string}
+        requests: {type: integer, minimum: 0}
+        errors: {type: integer, minimum: 0}
+        avg_ms: {type: [number, 'null']}
+        p95_ms: {type: [number, 'null']}
+        state_max_tokens: {type: [integer, 'null']}
+      required: [backend, model, requests, errors, avg_ms, p95_ms, state_max_tokens]
+      additionalProperties: false
+    CheckResult:
+      type: object
+      properties:
+        tokens:
+          type: object
+          additionalProperties: true
+        state_max_tokens: {type: integer}
+        instruction_cap: {type: integer}
+        instructions_over_cap:
+          type: array
+          items: {type: string}
+      required: [tokens, state_max_tokens, instruction_cap, instructions_over_cap]
+      additionalProperties: true
+    ErrorEnvelope:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            type: {type: string}
+            message: {type: string}
+          required: [type, message]
+          additionalProperties: true
+      required: [error]
+      additionalProperties: true

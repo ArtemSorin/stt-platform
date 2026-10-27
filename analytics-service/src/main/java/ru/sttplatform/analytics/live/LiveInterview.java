@@ -70,6 +70,9 @@ public final class LiveInterview {
         }
     }
 
+    /** Состояния автомата обработки ответа и перехода к следующему вопросу.
+     * @version 1.0.0
+     */
     private enum Phase { IDLE, LISTENING, TENTATIVE, GRACE, WAIT_READY }
 
     private static final int BYTES_PER_MS = 32;                 // 16 кГц * 2 байта
@@ -175,13 +178,19 @@ public final class LiveInterview {
         this.pendingWaitMs = waitMs;
     }
 
-    /** Ожидает уточнение текста, которое STT пришлёт по внутреннему каналу. */
+    /** Ожидает уточнение текста, которое STT пришлёт по внутреннему каналу.
+     * @param waitMs предельное время ожидания в миллисекундах; ноль отключает ожидание
+     */
     public void setRefinementWait(long waitMs) {
         this.pendingWaitMs = Math.max(0, waitMs);
         this.awaitExternalRefinement = waitMs > 0;
     }
 
-    /** Куда и от чьего имени сохранять итоговый отчёт (Excel). */
+    /** Настраивает место сохранения отчёта и сведения о кандидате.
+     * @param exporter средство экспорта отчёта
+     * @param candidate имя кандидата для отчёта
+     * @param settings настройки, которые сохраняются в отчёте
+     */
     public void setExport(ReportExporter exporter, String candidate, Map<String, String> settings) {
         this.exporter = exporter;
         this.candidate = candidate == null ? "" : candidate.trim();
@@ -213,7 +222,10 @@ public final class LiveInterview {
         phase = Phase.LISTENING;
     }
 
-    /** Read-only preview for the combined demo. It uses the same policy/analyzer without advancing the interview. */
+    /** Формирует предварительное решение для демо без изменения состояния интервью.
+     * @param displayText текущий распознанный текст ответа
+     * @param requestId идентификатор запроса подсказки
+     */
     public void onPeek(String displayText, String requestId) {
         if (finished || phase == Phase.IDLE || phase == Phase.WAIT_READY || displayText == null || displayText.isBlank())
             return;
@@ -278,7 +290,18 @@ public final class LiveInterview {
         advance(st);
     }
 
-    /** Передаёт уже распознанный кадр; аналитика не получает PCM-аудио. */
+    /** Передаёт уже распознанный кадр; аналитика не получает PCM-аудио.
+     * @param type тип события Vosk: {@code partial} или {@code final}
+     * @param text распознанный текст
+     * @param samples число сэмплов обработанного аудио
+     * @param rms среднеквадратичная энергия кадра
+     * @param asrMs время распознавания кадра в миллисекундах
+     * @param vadState состояние детектора ответа на стороне STT
+     * @param audioMs позиция в аудиопотоке в миллисекундах
+     * @param speechStartMs позиция начала речи в миллисекундах
+     * @param speechDurationMs длительность речи в миллисекундах
+     * @param silenceMs длительность тишины в миллисекундах
+     */
     public void onSttFrame(String type, String text, int samples, double rms, double asrMs,
                            String vadState, long audioMs, long speechStartMs,
                            long speechDurationMs, long silenceMs) {
@@ -326,7 +349,10 @@ public final class LiveInterview {
         finishInterview();
     }
 
-    /** Применяет позднюю расшифровку Whisper к тому же ответу, который уже оценён. */
+    /** Применяет позднюю расшифровку Whisper к тому же ответу, который уже оценён.
+     * @param id идентификатор попытки ответа
+     * @param text уточнённый текст распознавания
+     */
     public void onRefined(int id, String text) {
         InterviewSession.AttemptRef ref = answerRefs.get(id);
         if (ref == null || text == null || text.isBlank()) return;
@@ -339,12 +365,17 @@ public final class LiveInterview {
         out.send(event);
     }
 
-    /** Завершает ожидание уточнения, включая отключённый или завершившийся ошибкой Whisper. */
+    /** Завершает ожидание уточнения, включая отключённый или завершившийся ошибкой Whisper.
+     * @param id идентификатор попытки ответа
+     */
     public void onRefineDone(int id) {
         onRefineDone(id, "");
     }
 
-    /** Закрывает ожидание уточнения и показывает ошибку Whisper, если она пришла. */
+    /** Закрывает ожидание уточнения и показывает ошибку Whisper, если она пришла.
+     * @param id идентификатор попытки ответа
+     * @param error текст ошибки или пустая строка при успешном завершении
+     */
     public void onRefineDone(int id, String error) {
         pendingRefinements.remove(id);
         synchronized (refinementLock) { refinementLock.notifyAll(); }

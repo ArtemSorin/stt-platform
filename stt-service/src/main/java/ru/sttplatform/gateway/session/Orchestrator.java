@@ -45,6 +45,9 @@ public final class Orchestrator implements AutoCloseable {
     private static final int HOLD_SAMPLES = RATE;
     private static final byte[] END = new byte[0];
     private static final CandidateBlock CANDIDATE_END = new CandidateBlock(0, new byte[0], "end");
+    /** Элемент упорядоченной очереди аудио кандидата и управляющих сигналов.
+     * @version 1.0.0
+     */
     private record CandidateBlock(long firstSample, byte[] pcm, String control) {}
     /** Блок смешанного аудио с позицией первого сэмпла.
      *
@@ -155,6 +158,17 @@ public final class Orchestrator implements AutoCloseable {
     private long sttQueueOverflowCount, candidateQueueOverflowCount, candidateQueueDroppedSamples;
     private long candidateQueueDroppedSpeechSamples, maxSttQueueDepth, maxCandidateQueueDepth;
 
+    /** Создаёт оркестратор основного сценария с включённой диаризацией.
+     * @param directory каталог артефактов сессии
+     * @param sttBaseUrl адрес STT-сервиса
+     * @param analyticsBaseUrl адрес сервиса аналитики
+     * @param sessionId идентификатор интервью
+     * @param whisperEnabled включено ли уточнение через Whisper
+     * @param candidateSpeechFactory фабрика отдельного потока распознавания кандидата
+     * @param integrationProps настройки определения конца ответа
+     * @param whisperClient HTTP-клиент помощника Whisper
+     * @throws java.io.IOException если не удалось открыть журналы сессии
+     */
     public Orchestrator(Path directory, String sttBaseUrl, String analyticsBaseUrl,
                         String sessionId, boolean whisperEnabled, SpeechSessionFactory candidateSpeechFactory,
                         IntegrationProperties integrationProps, WhisperClient whisperClient) throws java.io.IOException {
@@ -162,7 +176,18 @@ public final class Orchestrator implements AutoCloseable {
                 candidateSpeechFactory, integrationProps, whisperClient, false);
     }
 
-    /** Создаёт оркестратор с возможностью отключить диаризацию в тестовом сценарии. */
+    /** Создаёт оркестратор с возможностью отключить диаризацию в тестовом сценарии.
+     * @param directory каталог артефактов сессии
+     * @param sttBaseUrl адрес STT-сервиса
+     * @param analyticsBaseUrl адрес сервиса аналитики
+     * @param sessionId идентификатор интервью
+     * @param whisperEnabled включено ли уточнение через Whisper
+     * @param candidateSpeechFactory фабрика отдельного потока распознавания кандидата
+     * @param integrationProps настройки определения конца ответа
+     * @param whisperClient HTTP-клиент помощника Whisper
+     * @param testMode отключает диаризацию для изолированного теста аналитики
+     * @throws java.io.IOException если не удалось открыть журналы сессии
+     */
     public Orchestrator(Path directory, String sttBaseUrl, String analyticsBaseUrl,
                         String sessionId, boolean whisperEnabled, SpeechSessionFactory candidateSpeechFactory,
                         IntegrationProperties integrationProps, WhisperClient whisperClient,
@@ -171,7 +196,19 @@ public final class Orchestrator implements AutoCloseable {
                 candidateSpeechFactory, integrationProps, whisperClient, testMode, "");
     }
 
-    /** Создаёт оркестратор для основной или тестовой сессии с именем кандидата в отчёте. */
+    /** Создаёт оркестратор основной или тестовой сессии с именем кандидата в отчёте.
+     * @param directory каталог артефактов сессии
+     * @param sttBaseUrl адрес STT-сервиса
+     * @param analyticsBaseUrl адрес сервиса аналитики
+     * @param sessionId идентификатор интервью
+     * @param whisperEnabled включено ли уточнение через Whisper
+     * @param candidateSpeechFactory фабрика отдельного потока распознавания кандидата
+     * @param integrationProps настройки определения конца ответа
+     * @param whisperClient HTTP-клиент помощника Whisper
+     * @param testMode отключает диаризацию для изолированного теста аналитики
+     * @param candidateName имя кандидата для отчёта
+     * @throws java.io.IOException если не удалось открыть журналы сессии
+     */
     public Orchestrator(Path directory, String sttBaseUrl, String analyticsBaseUrl,
                         String sessionId, boolean whisperEnabled, SpeechSessionFactory candidateSpeechFactory,
                         IntegrationProperties integrationProps, WhisperClient whisperClient,
@@ -371,6 +408,10 @@ public final class Orchestrator implements AutoCloseable {
         return Math.sqrt(sum / (pcm.length / 2));
     }
 
+    /** Передаёт кадр PCM обоим потокам Vosk и фиксирует его позицию на общей шкале.
+     * @param firstSample индекс первого сэмпла кадра
+     * @param block бинарный PCM16-кадр
+     */
     public synchronized void submit(long firstSample, byte[] block) {
         if (closed || finishing) return;
         if (firstSample != capturedSamples) throw new IllegalStateException("Разрыв общей шкалы аудиосэмплов.");
@@ -398,6 +439,12 @@ public final class Orchestrator implements AutoCloseable {
         audio.addLast(new AudioBlock(firstSample, block));
     }
 
+    /** Сопоставляет новые интервалы говорящих со словами общего потока Vosk.
+     * @param segments новые сегменты диаризации
+     * @param activeSegments текущие предварительные интервалы говорящих
+     * @param audioSeconds длительность принятого аудио в секундах
+     * @param flush завершить сопоставление, не ожидая новых интервалов
+     */
     public synchronized void onDiarization(List<Map<String, Object>> segments,
                                            List<Map<String, Object>> activeSegments,
                                            double audioSeconds, boolean flush) {
@@ -596,6 +643,7 @@ public final class Orchestrator implements AutoCloseable {
         return lastPeekCandidateEvidence ? "Кандидат" : "Не определено";
     }
 
+    /** Отмечает готовность вопроса и начинает собирать следующий ответ кандидата. */
     public synchronized void questionAsked() {
         if (question == null) throw new IllegalStateException("Сервис аналитики ещё не выдал вопрос.");
         readySample = capturedSamples;
@@ -610,12 +658,19 @@ public final class Orchestrator implements AutoCloseable {
                 "audio_s", capturedSamples / (double) RATE));
     }
 
+    /** Закрывает текущую попытку без добавления аудиоданных ответа. */
     public synchronized void questionSkipped() {
         if (!candidateQueue.offer(new CandidateBlock(capturedSamples, new byte[0], "skip")))
             throw new IllegalStateException("Очередь кандидата занята.");
         logQuietly(Json.map("type", "question_skipped", "audio_s", capturedSamples / (double) RATE));
     }
 
+    /** Передаёт событие браузерного синтеза речи аналитике интервью.
+     * @param event событие TTS: {@code start}, {@code finish}, {@code cancel} или {@code error}
+     * @param questionText произнесённый текст вопроса
+     * @param voice выбранный голос синтеза
+     * @param voiceLang язык синтеза
+     */
     public synchronized void ttsEvent(String event, String questionText, String voice, String voiceLang) {
         if (!List.of("start", "finish", "cancel", "error").contains(event)) return;
         if ("finish".equals(event)) {
@@ -629,6 +684,9 @@ public final class Orchestrator implements AutoCloseable {
                 "received_wall_s", Json.round((System.nanoTime() - startedNanos) / 1e9, 3)));
     }
 
+    /** Фиксирует показ подсказки и связывает его с временной позицией аудио.
+     * @param id идентификатор события предварительной подсказки
+     */
     public synchronized void suggestionSeen(String id) {
         if (id == null) return;
         if (id.equals(previewEventId)) {
@@ -1006,6 +1064,9 @@ public final class Orchestrator implements AutoCloseable {
         thread.start();
     }
 
+    /** Возвращает актуальное состояние браузерной сессии.
+     * @return состояние вопроса, ответа, подсказок и отчёта
+     */
     public synchronized Map<String, Object> status() {
         List<Map<String, Object>> words = currentWords();
         int from = Math.max(0, words.size() - 80);
@@ -1022,6 +1083,10 @@ public final class Orchestrator implements AutoCloseable {
                 "whisper_state", whisperState, "bridge_error", failure);
     }
 
+    /** Завершает потоки распознавания и отправляет аналитику итоговые сегменты.
+     * @param audioSeconds длительность принятого аудио в секундах
+     * @param finalSegments финальные сегменты диаризации
+     */
     public void finish(double audioSeconds, List<Map<String, Object>> finalSegments) {
         synchronized (this) {
             if (closed || finishing) return;
@@ -1163,6 +1228,11 @@ public final class Orchestrator implements AutoCloseable {
         catch (NumberFormatException ignored) { return 0; }
     }
 
+    /** Проверяет, относится ли подсказка к аудио, уже закрытому решением.
+     * @param previewSample позиция подсказки в сэмплах
+     * @param decisionAudioEnd конечная позиция аудио в решении
+     * @return {@code true}, если подсказку следует считать устаревшей для текущего решения
+     */
     public static boolean isPreviewAtOrBeforeDecision(long previewSample, long decisionAudioEnd) {
         return decisionAudioEnd > 0 && previewSample <= decisionAudioEnd;
     }

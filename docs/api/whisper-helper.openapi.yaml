@@ -1,0 +1,124 @@
+openapi: 3.1.0
+info:
+  title: Локальный HTTP-помощник Whisper
+  version: 1.0.0
+  description: >-
+    HTTP API локального Python-процесса faster-whisper. STT вызывает его для второго
+    прохода по аудиобуферу ответа. По умолчанию слушает только 127.0.0.1:9000;
+    HTTP-аутентификация не предусмотрена.
+servers:
+  - url: http://127.0.0.1:9000
+    description: Локальный процесс разработчика
+security: []
+tags:
+  - name: Распознавание
+    description: Принимает сырой PCM16 mono 16 кГц.
+paths:
+  /:
+    get:
+      operationId: whisperHealth
+      summary: Проверить доступность процесса
+      responses:
+        '200':
+          description: Процесс отвечает
+          content:
+            text/plain:
+              schema:
+                type: string
+                const: ok
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /transcribe:
+    post:
+      tags: [Распознавание]
+      operationId: transcribeAudio
+      summary: Распознать аудио и вернуть текст
+      description: >-
+        При нечётном числе байт последний байт отбрасывается. Пустой или слишком
+        короткий вход может дать пустой текст. Ошибка распознавания возвращается как
+        HTTP 500 с текстом исключения.
+      requestBody:
+        $ref: '#/components/requestBodies/PcmAudio'
+      responses:
+        '200':
+          description: Распознанный текст; может быть пустым
+          content:
+            text/plain:
+              schema:
+                type: string
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /transcribe-json:
+    post:
+      tags: [Распознавание]
+      operationId: transcribeAudioWithWords
+      summary: Распознать аудио и вернуть слова с временными метками
+      description: Времена слов заданы в секундах относительно начала переданного аудиобуфера.
+      requestBody:
+        $ref: '#/components/requestBodies/PcmAudio'
+      responses:
+        '200':
+          description: Текст и распознанные слова
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transcription'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+components:
+  requestBodies:
+    PcmAudio:
+      required: true
+      description: "Сырой PCM без WAV-заголовка: 16 бит, little-endian, один канал, 16 000 Гц."
+      content:
+        application/octet-stream:
+          schema:
+            type: string
+            format: binary
+  responses:
+    NotFound:
+      description: Неизвестный путь; тело — текст not found
+      content:
+        text/plain:
+          schema:
+            type: string
+            const: not found
+    InternalError:
+      description: Ошибка обработки; тело содержит текст исключения
+      content:
+        text/plain:
+          schema:
+            type: string
+  schemas:
+    Transcription:
+      type: object
+      properties:
+        text:
+          type: string
+        words:
+          type: array
+          items:
+            $ref: '#/components/schemas/Word'
+      required: [text, words]
+      additionalProperties: false
+    Word:
+      type: object
+      properties:
+        word:
+          type: string
+        start:
+          type: number
+          minimum: 0
+        end:
+          type: number
+          minimum: 0
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+      required: [word, start, end, confidence]
+      additionalProperties: false

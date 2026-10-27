@@ -21,20 +21,27 @@ public class SpeechSession implements AutoCloseable {
     /**
      * Хранит слово с временными метками и оценкой распознавания.
      *
+     * @param word текст распознанного слова
+     * @param start начало в секундах от начала потока
+     * @param end конец в секундах от начала потока
+     * @param confidence уверенность распознавателя или {@code null}
      * @version 1.0.0
      */
     public record Word(String word, double start, double end, Double confidence) {}
     /**
      * Передаёт промежуточный или итоговый результат Vosk.
      *
+     * @param type тип события распознавания
+     * @param text распознанный текст
+     * @param words слова с временными метками, если они доступны
      * @version 1.0.0
      */
     public record Event(String type, String text, List<Word> words) {
         /**
          * Создаёт объект с указанными зависимостями и настройками.
          *
-         * @param type параметр операции
-         * @param text текст ответа или документа
+         * @param type тип события распознавания
+         * @param text текст промежуточного или финального результата
          */
         public Event(String type, String text) { this(type, text, List.of()); }
     }
@@ -57,7 +64,11 @@ public class SpeechSession implements AutoCloseable {
         this.recognizer.setPartialWords(true);
     }
 
-    /** @return событие для клиента или null, если ничего нового (оптимизация: не шлём дубли). */
+    /** Передаёт PCM-кадр распознавателю и возвращает только изменившуюся гипотезу.
+     * @param data PCM16-данные кадра
+     * @param len число значимых байтов в кадре
+     * @return событие распознавания или {@code null}, если новой гипотезы нет
+     */
     public Event accept(byte[] data, int len) {
         if (recognizer.acceptWaveForm(data, len)) {
             lastPartial = "";
@@ -73,7 +84,9 @@ public class SpeechSession implements AutoCloseable {
         return event;
     }
 
-    /** Дораспознать остаток после остановки записи. */
+    /** Дораспознаёт остаток аудио после остановки записи.
+     * @return финальное событие распознавания
+     */
     public Event finish() {
         lastPartial = "";
         return read(recognizer.getFinalResult(), "final", "text", "result");

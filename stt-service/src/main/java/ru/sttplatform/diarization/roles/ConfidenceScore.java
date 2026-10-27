@@ -9,6 +9,15 @@ package ru.sttplatform.diarization.roles;
 public final class ConfidenceScore {
     private ConfidenceScore() {}
 
+    /** Рассчитывает нормированную уверенность для сегмента речи.
+     * @param tier источник решения о роли
+     * @param label назначенная роль
+     * @param decision основание классификации
+     * @param candidateSimilarity сходство с голосом кандидата
+     * @param interviewerSimilarity сходство с голосом интервьюера
+     * @param threshold порог сравнения голосовых сходств
+     * @return уверенность от 0 до 100 процентов
+     */
     public static int percent(String tier, String label, String decision, Double candidateSimilarity,
                        Double interviewerSimilarity, double threshold) {
         if ("эталон".equals(tier)) return 100;
@@ -35,6 +44,10 @@ public final class ConfidenceScore {
         return ("высокая".equals(tier) ? 75 : 50) + (int) Math.round(24 * strength);
     }
 
+    /** Преобразует числовую уверенность в текстовую категорию.
+     * @param percent уверенность от 0 до 100
+     * @return категория уверенности или {@code эталон} для подтверждённого голоса
+     */
     public static String label(int percent) {
         if (percent == 100) return "эталон";
         return percent >= 75 ? "высокая" : percent >= 50 ? "средняя" : "низкая";

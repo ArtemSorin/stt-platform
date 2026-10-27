@@ -51,7 +51,10 @@ public final class TermNormalizer {
         this(glossary, true);
     }
 
-    /** @param phonetic false — только точные варианты из словаря (без сопоставления «по звучанию») */
+    /** Создаёт нормализатор с настройкой фонетического сопоставления.
+     * @param glossary словарь терминов и вариантов произношения
+     * @param phonetic {@code false} отключает сопоставление по звучанию
+     */
     public TermNormalizer(Glossary glossary, boolean phonetic) {
         this.phonetic = phonetic;
         for (Glossary.Entry e : glossary.entries()) {

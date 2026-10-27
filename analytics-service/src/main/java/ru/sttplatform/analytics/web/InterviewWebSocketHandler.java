@@ -29,11 +29,16 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
-/** Внутренний канал событий STT → analytics. Бинарное аудио здесь запрещено. */
+/** Внутренний канал событий STT → analytics. Бинарное аудио здесь запрещено.
+ * @version 1.0.0
+ */
 @Component
 public final class InterviewWebSocketHandler extends AbstractWebSocketHandler {
     private static final Logger log = LoggerFactory.getLogger(InterviewWebSocketHandler.class);
 
+    /** Состояние живого интервью, привязанное к WebSocket-соединению.
+     * @version 1.0.0
+     */
     private static final class Active {
         final LiveInterview live;
         final EventSpeechEngine speech;
@@ -60,6 +65,15 @@ public final class InterviewWebSocketHandler extends AbstractWebSocketHandler {
     private final JudgeProperties judgeProps;
     private final Map<String, Active> active = new ConcurrentHashMap<>();
 
+    /** Создаёт обработчик внутреннего потока событий STT.
+     * @param knowledge банк и анализатор вопросов
+     * @param policy правила переходов интервью
+     * @param properties настройки сессии
+     * @param reports генератор и хранилище отчётов
+     * @param mapper JSON-сериализатор
+     * @param judge помощник семантической оценки
+     * @param judgeProps настройки помощника оценки
+     */
     public InterviewWebSocketHandler(InterviewKnowledge knowledge, DecisionPolicy policy,
                                      InterviewProperties properties, ExcelReportService reports,
                                      ObjectMapper mapper, FridaJudge judge, JudgeProperties judgeProps) {
@@ -72,6 +86,11 @@ public final class InterviewWebSocketHandler extends AbstractWebSocketHandler {
         this.judgeProps = judgeProps;
     }
 
+    /** Обрабатывает JSON-событие STT и обновляет состояние интервью.
+     * @param ws внутреннее WebSocket-соединение STT-сервиса
+     * @param message JSON-команда или событие протокола
+     * @throws IOException при ошибке чтения или отправки JSON
+     */
     @Override
     protected void handleTextMessage(WebSocketSession ws, TextMessage message) throws IOException {
         JsonNode data = mapper.readTree(message.getPayload());
@@ -135,6 +154,11 @@ public final class InterviewWebSocketHandler extends AbstractWebSocketHandler {
         }
     }
 
+    /** Отклоняет бинарные кадры: аудио принимает только STT-сервис.
+     * @param ws внутреннее WebSocket-соединение STT-сервиса
+     * @param message бинарный кадр, запрещённый этим протоколом
+     * @throws IOException при ошибке закрытия WebSocket-соединения
+     */
     @Override
     protected void handleBinaryMessage(WebSocketSession ws, BinaryMessage message) throws IOException {
         send(ws, Map.of("type", "error", "message", "Analytics принимает события, а не бинарное аудио."));
@@ -188,12 +212,20 @@ public final class InterviewWebSocketHandler extends AbstractWebSocketHandler {
         return settings;
     }
 
+    /** Освобождает временный движок речи после закрытия соединения.
+     * @param ws завершённое WebSocket-соединение
+     * @param status причина закрытия соединения
+     */
     @Override
     public void afterConnectionClosed(WebSocketSession ws, CloseStatus status) {
         Active session = active.remove(ws.getId());
         if (session != null) session.speech.close();
     }
 
+    /** Записывает транспортную ошибку внутреннего WebSocket-канала.
+     * @param ws соединение, в котором произошла ошибка
+     * @param error причина сбоя транспорта
+     */
     @Override
     public void handleTransportError(WebSocketSession ws, Throwable error) {
         log.warn("Ошибка внутреннего WebSocket {}: {}", ws.getId(), error.toString());

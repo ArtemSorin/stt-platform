@@ -35,7 +35,11 @@ public final class SpokenText {
         this.dict = dict;
     }
 
-    /** Формат: «латиница=чтение», по строке; # — комментарий. */
+    /** Загружает словарь озвучивания в формате «латиница=чтение», по одной записи на строку.
+     * Строки, начинающиеся с {@code #}, считаются комментариями.
+     * @param text содержимое словаря
+     * @return преобразователь с загруженными произношениями
+     */
     public static SpokenText parse(String text) {
         Map<String, String> m = new HashMap<>();
         for (String line : text.split("\\R")) {
@@ -58,7 +62,10 @@ public final class SpokenText {
         return process(text, null);
     }
 
-    /** Латинские фрагменты, для которых нет записи в словаре и пришлось применить запасную транслитерацию. */
+    /** Возвращает латинские фрагменты, для которых потребовалась запасная транслитерация.
+     * @param text исходный текст
+     * @return фрагменты, отсутствующие в словаре произношений
+     */
     public List<String> unknown(String text) {
         List<String> out = new ArrayList<>();
         process(text, out);

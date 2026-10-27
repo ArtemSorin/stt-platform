@@ -23,12 +23,16 @@ public class WebSocketConfig implements WebSocketConfigurer {
      * Создаёт конфигурацию.
      *
      * @param interviewHandler обработчик интервью
+     * @param authentication проверка общего секрета handshake
      */
     public WebSocketConfig(InterviewWebSocketHandler interviewHandler, InternalEventsHandshakeInterceptor authentication) {
         this.interviewHandler = interviewHandler;
         this.authentication = authentication;
     }
 
+    /** Регистрирует защищённый внутренний канал обмена событиями интервью.
+     * @param registry реестр серверных WebSocket-маршрутов
+     */
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(interviewHandler, "/ws/interview-events").addInterceptors(authentication);

@@ -96,7 +96,13 @@ public final class EndpointDetector {
         return onFrameRms(n, rms, partialWords, endsWithConnector);
     }
 
-    /** Обрабатывает число сэмплов и энергию кадра без получения сырого PCM. */
+    /** Обрабатывает число сэмплов и энергию кадра без получения сырого PCM.
+     * @param n число сэмплов в кадре
+     * @param rms среднеквадратичная энергия кадра
+     * @param partialWords число слов в текущей гипотезе Vosk
+     * @param endsWithConnector заканчивается ли гипотеза союзом или предлогом
+     * @return новое состояние детектора
+     */
     public State onFrameRms(int n, double rms, int partialWords, boolean endsWithConnector) {
         if (state == State.NO_SPEECH || n == 0) return state;
         long frameStart = samples;
