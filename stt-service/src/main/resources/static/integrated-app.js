@@ -1,8 +1,9 @@
 const $ = id => document.getElementById(id);
 const enroll = $('enroll'), finish = $('finish');
 const ENROLLMENT_DURATION_MS = 10_000;
+const AUDIO_SAMPLE_RATE = 16_000;
 let stream, display, context, micSource, systemSource, worklet, sessionId;
-let mode = 'idle', sequence = 0, closing = false, finishRequested = false, pending = Promise.resolve(), stopResolver;
+let mode = 'idle', sequence = 0, closing = false, finishRequested = false, pending = Promise.resolve(), stopResolver, workletFailed = false;
 let enrollmentStartedAt = 0, enrollmentTimer, enrollmentFinishing = false;
 let startTime = 0, polling = false, currentQuestionKey = '', scheduledQuestionKey = '', questionTimer;
 let lastDecision = '', lastPreviewKey = '', lastPreviewId = '', lastReportSignature = '', eventLines = [];
@@ -128,7 +129,7 @@ function renderTranscript(integration) {
 }
 function render(status) {
   const phase = status.phase || 'idle', integration = status.integration || {};
-  $('phase').textContent = ({idle:'Ожидание', enrolling:'Запись эталона · микрофон + компьютер', preparing:'Создаём эталон',
+  $('phase').textContent = ({idle:'Ожидание', enrolling:'Запись эталона · звук компьютера', preparing:'Создаём эталон',
     retry:'Повторите эталон', live:'Интервью · анализ идёт', stopping:'Завершаем анализ',
     finished:'Интервью завершено', error:'Ошибка обработки'})[phase] || phase;
   $('light').classList.toggle('active', phase === 'enrolling' || phase === 'live');
@@ -224,7 +225,7 @@ function render(status) {
     enroll.disabled = false; enroll.textContent = 'Повторить запись голоса'; finish.disabled = true;
   } else if (phase === 'live') {
     enroll.disabled = true; finish.disabled = false;
-    $('hint').textContent = 'Эталон и интервью записываются из одного смешанного потока: микрофон + звук компьютера, моно PCM 16 кГц.';
+    $('hint').textContent = 'Эталон записан из звука компьютера; во время интервью обрабатываются микрофон и звук компьютера.';
   } else if (phase === 'finished' || phase === 'error') {
     enroll.disabled = false; enroll.textContent = 'Новое интервью'; finish.disabled = true;
   }
@@ -316,7 +317,7 @@ $('tts-enabled').onchange = () => {
 };
 
 function stopAudio() {
-  if (!worklet || (mode !== 'enroll' && mode !== 'live')) return Promise.resolve();
+  if (!worklet || workletFailed || (mode !== 'enroll' && mode !== 'live')) return Promise.resolve();
   const ended = new Promise(resolve => { stopResolver = resolve; });
   worklet.port.postMessage('stop'); return ended;
 }
@@ -327,6 +328,7 @@ function releaseAudio() {
   });
   micSource?.disconnect(); systemSource?.disconnect(); worklet?.disconnect(); context?.close();
   stream = display = context = micSource = systemSource = worklet = undefined;
+  workletFailed = false;
   if ('speechSynthesis' in window) speechSynthesis.cancel();
 }
 function systemAudioAvailable() {
@@ -336,9 +338,9 @@ async function sourceLost(reason) {
   if (closing || mode === 'done' || mode === 'idle') return;
   closing = true;
   clearTimeout(enrollmentTimer); enrollmentTimer = undefined;
-  showError(reason === 'system_audio_lost'
-    ? 'Демонстрация экрана или системный звук прервались. Сохраняем обработанную часть интервью.'
-    : 'Микрофон отключился. Сохраняем обработанную часть интервью.');
+  showError(({system_audio_lost:'Демонстрация экрана или системный звук прервались.',
+    microphone_lost:'Микрофон отключился.', capture_error:'Обработка звука в браузере остановилась.'})[reason]
+    + ' Сохраняем обработанную часть интервью.');
   try {
     if (mode === 'enroll' || mode === 'live') await stopAudio();
     mode = 'stopping'; try { await pending; } catch (error) { showError(error.message); }
@@ -347,7 +349,7 @@ async function sourceLost(reason) {
   finally { mode = 'done'; releaseAudio(); enroll.disabled = false; closing = false; }
 }
 async function prepareAudio() {
-  // getDisplayMedia must be invoked from the original button click.
+  // Запрос демонстрации экрана должен начаться непосредственно по нажатию кнопки.
   display = await navigator.mediaDevices.getDisplayMedia({video: {displaySurface:'monitor'}, audio:true,
     systemAudio:'include', monitorTypeSurfaces:'include'});
   const video = display.getVideoTracks()[0], systemAudio = display.getAudioTracks()[0];
@@ -355,8 +357,17 @@ async function prepareAudio() {
     throw new Error('Выберите весь экран, не окно или вкладку, и включите передачу системного звука.');
   if (!systemAudio || systemAudio.readyState !== 'live')
     throw new Error('Chrome/Edge не передал системный звук. Повторите выбор всего экрана со звуком.');
-  stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1, echoCancellation:false, noiseSuppression:false, autoGainControl:false}});
-  context = new AudioContext(); await context.audioWorklet.addModule('/integrated-worklet.js');
+  stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1, echoCancellation:true, noiseSuppression:false, autoGainControl:false}});
+  const microphone = stream.getAudioTracks()[0];
+  if (!microphone || microphone.readyState !== 'live') throw new Error('Не удалось получить звук микрофона.');
+  const echoCancellation = microphone.getSettings?.().echoCancellation;
+  if (echoCancellation === false || echoCancellation == null)
+    log('Браузер не подтвердил эхоподавление микрофона. При заметном эхо используйте наушники.');
+  try { context = new AudioContext({sampleRate:AUDIO_SAMPLE_RATE}); }
+  catch (_) { throw new Error('Браузер не смог создать аудиоконтекст с частотой 16 кГц.'); }
+  // Оба входа приводятся браузером к частоте контекста до обработки в Worklet.
+  if (context.sampleRate !== AUDIO_SAMPLE_RATE) throw new Error('Браузер не поддерживает аудиоконтекст с частотой 16 кГц.');
+  await context.audioWorklet.addModule('/integrated-worklet.js');
   micSource = context.createMediaStreamSource(stream);
   systemSource = context.createMediaStreamSource(new MediaStream([systemAudio]));
   worklet = new AudioWorkletNode(context, 'mono-pcm', {numberOfInputs:2, numberOfOutputs:1, outputChannelCount:[1]});
@@ -369,8 +380,15 @@ async function prepareAudio() {
     pending = pending.then(() => request(path, event.data.buffer, {'X-Sequence':String(number)}));
     pending.catch(error => { showError(error.message); if (mode === 'live') sourceLost('capture_error'); });
   };
+  worklet.onprocessorerror = () => {
+    // Ошибившийся Worklet больше не ответит на stop; не оставляем завершение интервью в ожидании.
+    workletFailed = true;
+    stopResolver?.(); stopResolver = undefined;
+    if (closing) showError('Обработка звука в браузере остановилась. Сохраняем обработанную часть интервью.');
+    else return sourceLost('capture_error');
+  };
   video.onended = systemAudio.onended = () => sourceLost('system_audio_lost');
-  stream.getAudioTracks()[0].onended = () => sourceLost('microphone_lost');
+  microphone.onended = () => sourceLost('microphone_lost');
   await context.resume();
   if (!systemAudioAvailable()) throw new Error('Демонстрация экрана или системный звук прервались до начала.');
 }
@@ -395,9 +413,9 @@ async function startEnrollment() {
     enrollmentStartedAt = performance.now();
     worklet.port.postMessage('enroll');
     enroll.disabled = false; enroll.textContent = 'Остановить запись эталона';
-    $('hint').textContent = 'Говорите около 10 секунд. Эталон записывается из общего сигнала микрофона и звука компьютера; во время регистрации должен звучать только кандидат.';
+    $('hint').textContent = 'Попросите кандидата говорить около 10 секунд. Его голос должен быть слышен из компьютера.';
     enrollmentTimer = setTimeout(() => { if (mode === 'enroll') finishEnrollment(); }, ENROLLMENT_DURATION_MS);
-    render(status); log('Началась десятисекундная запись смешанного эталона: микрофон + звук компьютера');
+    render(status); log('Началась десятисекундная запись эталона из звука компьютера');
   } catch (error) { showError(error.message); releaseAudio(); mode = 'idle'; enroll.disabled = false; }
 }
 async function finishEnrollment() {
