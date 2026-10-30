@@ -14,5 +14,5 @@
 
 - Основной сценарий использует Vosk, Nemotron и CAM++. Whisper и FRIDA можно отключить; `fake` и `heuristic` — тестовый и резервный backend, а не модели.
 - Браузерный `speechSynthesis` для озвучивания вопроса использует голос и реализацию ОС/браузера. Репозиторий не выбирает и не фиксирует TTS-модель.
-- Пример конвертации `coriollon/whisper-large-v3-turbo-russian-codeswitch` в `whisper_server.py` не является текущим default.
+- Пример конвертации `coriollon/whisper-large-v3-turbo-russian-codeswitch` в `whisper_server.py` не является текущим default. Отдельный [GPU-эксперимент на GOLOS](experiments/2026-10-28-whisper-golos.md) не подтверждает качество модели на интервью.
 - При замене весов обновляйте таблицу и подписи диаграммы по источнику модели и SHA-256 локального артефакта. Не переносите upstream revision на локальные веса без проверки совпадения.

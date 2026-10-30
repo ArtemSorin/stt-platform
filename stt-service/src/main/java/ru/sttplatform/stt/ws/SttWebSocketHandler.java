@@ -41,9 +41,10 @@ public class SttWebSocketHandler extends AbstractWebSocketHandler {
      */
     private static final class State {
         final SpeechSession speech;
+        final boolean background;
         double rtf;
         int frames;
-        State(SpeechSession speech) { this.speech = speech; }
+        State(SpeechSession speech, boolean background) { this.speech = speech; this.background = background; }
     }
 
     private final SpeechSessionFactory factory;
@@ -65,7 +66,8 @@ public class SttWebSocketHandler extends AbstractWebSocketHandler {
      */
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-        sessions.put(session.getId(), new State(factory.create()));
+        sessions.put(session.getId(), new State(factory.create(),
+                "microphone".equals(session.getHandshakeHeaders().getFirst("X-Audio-Source"))));
         log.info("STT-клиент подключён: {}", session.getId());
     }
 
@@ -83,7 +85,20 @@ public class SttWebSocketHandler extends AbstractWebSocketHandler {
         buf.get(data);
 
         long t0 = System.nanoTime();
-        SpeechSession.Event event = state.speech.accept(data, data.length);
+        Thread thread = Thread.currentThread();
+        int previousPriority = thread.getPriority();
+        boolean changedPriority = false;
+        SpeechSession.Event event;
+        try {
+            // При нагрузке распознавание интервьюера уступает процессор голосу кандидата.
+            if (state.background && previousPriority > Thread.MIN_PRIORITY) {
+                try { thread.setPriority(Thread.MIN_PRIORITY); changedPriority = true; }
+                catch (SecurityException ignored) { /* Среда может запрещать изменение приоритета. */ }
+            }
+            event = state.speech.accept(data, data.length);
+        } finally {
+            if (changedPriority) try { thread.setPriority(previousPriority); } catch (SecurityException ignored) {}
+        }
         double ratio = ((System.nanoTime() - t0) / 1e6) / Math.max(1.0, data.length / (double) Pcm.BYTES_PER_MS);
         state.rtf = state.frames == 0 ? ratio : 0.9 * state.rtf + 0.1 * ratio;
         state.frames++;

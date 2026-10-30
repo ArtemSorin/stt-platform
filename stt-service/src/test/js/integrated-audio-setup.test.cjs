@@ -57,13 +57,14 @@ function harness({rate = 16000, echoCancellation = true} = {}) {
       getDisplayMedia:async options => { calls.displayOptions = options; return display; },
       getUserMedia:async options => { calls.micOptions = options; return microphoneStream; }
     }},
-    fetch:async (url, options) => { calls.requests.push({url, options}); return {ok:true, json:async () => ({})}; },
+    fetch:async (url, options) => { calls.requests.push({url, options}); return {ok:true, json:async () => calls.responses?.[url] || {}}; },
     setInterval(){}, setTimeout(){}, clearTimeout(){}, performance:{now:() => 0}, console
   };
   const source = fs.readFileSync(path.join(__dirname, '../../main/resources/static/integrated-app.js'), 'utf8');
   vm.runInNewContext(source + `
     globalThis.prepareAudioForTest = prepareAudio;
     globalThis.startEnrollmentForTest = startEnrollment;
+    globalThis.finishEnrollmentForTest = finishEnrollment;
     globalThis.releaseAudioForTest = releaseAudio;
     globalThis.setModeForTest = value => mode = value;
     globalThis.setSessionForTest = value => sessionId = value;
@@ -89,6 +90,18 @@ test('захват запрашивает AEC и подключает оба и�
   assert.equal(h.calls.stopped.length, 3);
 });
 
+test('перед запуском двух каналов серверу сообщается формат интервью', async () => {
+  const h = harness();
+  h.calls.responses = {'/api/enrollment/finish':{phase:'live'}};
+  await h.sandbox.prepareAudioForTest();
+  h.sandbox.setSessionForTest('session');
+  h.sandbox.setModeForTest('enroll');
+  await h.sandbox.finishEnrollmentForTest();
+  const request = h.calls.requests.find(item => item.url === '/api/enrollment/finish');
+  assert.equal(request.options.headers['X-Audio-Mode'], 'channels');
+  h.sandbox.releaseAudioForTest();
+});
+
 test('неподходящая частота останавливает запуск и освобождает устройства', async () => {
   const h = harness({rate:48000});
   await h.sandbox.startEnrollmentForTest();
@@ -106,7 +119,7 @@ test('неподтверждённое эхоподавление показыв
   h.sandbox.releaseAudioForTest();
 });
 
-test('кадры эталона и интервью отправляются по прежним маршрутам и по порядку', async () => {
+test('кадры эталона и пара каналов отправляются по порядку', async () => {
   const h = harness();
   await h.sandbox.prepareAudioForTest();
   h.sandbox.setSessionForTest('session');
@@ -116,9 +129,9 @@ test('кадры эталона и интервью отправляются п�
   await h.sandbox.pendingForTest();
   h.sandbox.setModeForTest('live');
   h.sandbox.resetSequenceForTest();
-  h.calls.worklet.port.onmessage({data:{type:'audio', buffer:new Uint8Array([2, 0]).buffer}});
+  h.calls.worklet.port.onmessage({data:{type:'audio', buffer:new Uint8Array([2, 0, 3, 0]).buffer}});
   await h.sandbox.pendingForTest();
-  assert.deepEqual(h.calls.requests.map(request => request.url), ['/api/enrollment/audio', '/api/enrollment/audio', '/api/audio']);
+  assert.deepEqual(h.calls.requests.map(request => request.url), ['/api/enrollment/audio', '/api/enrollment/audio', '/api/audio/channels']);
   assert.deepEqual(h.calls.requests.map(request => request.options.headers['X-Sequence']), ['0', '1', '0']);
   assert.ok(h.calls.requests.every(request => request.options.headers['X-Session-Id'] === 'session'));
   h.sandbox.releaseAudioForTest();
@@ -136,15 +149,22 @@ test('ошибка Worklet завершает интервью без ожида
   assert.equal(h.calls.stopped.length, 3);
 });
 
-test('потеря источника завершает интервью с правильной причиной', async () => {
-  for (const [name, reason] of [['system', 'system_audio_lost'], ['mic', 'microphone_lost']]) {
-    const h = harness();
-    await h.sandbox.prepareAudioForTest();
-    h.sandbox.setSessionForTest('session');
-    h.sandbox.setModeForTest('live');
-    await h[name].onended();
-    assert.equal(h.calls.requests.at(-1).url, '/api/finish');
-    assert.equal(h.calls.requests.at(-1).options.headers['X-Stop-Reason'], reason);
-    assert.equal(h.calls.stopped.length, 3);
-  }
+test('потеря системного звука завершает интервью, потеря микрофона оставляет кандидата', async () => {
+  const mic = harness();
+  await mic.sandbox.prepareAudioForTest();
+  mic.sandbox.setSessionForTest('session');
+  mic.sandbox.setModeForTest('live');
+  mic.mic.onended();
+  assert.match(mic.element('error').textContent, /Речь кандидата продолжает/);
+  assert.equal(mic.calls.requests.length, 0);
+  assert.equal(mic.calls.stopped.length, 0);
+
+  const system = harness();
+  await system.sandbox.prepareAudioForTest();
+  system.sandbox.setSessionForTest('session');
+  system.sandbox.setModeForTest('live');
+  await system.system.onended();
+  assert.equal(system.calls.requests.at(-1).url, '/api/finish');
+  assert.equal(system.calls.requests.at(-1).options.headers['X-Stop-Reason'], 'system_audio_lost');
+  assert.equal(system.calls.stopped.length, 3);
 });

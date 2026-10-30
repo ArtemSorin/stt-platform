@@ -64,6 +64,7 @@ python -m unittest discover -s analytics-service/judge -p 'test_*.py' -v
 - [HTTP/OpenAPI-контракты](docs/api/README.md)
 - [WebSocket-события и последовательности](docs/api/interview-events.md)
 - [Архитектурные решения](docs/adr/README.md)
+- [Журнал экспериментов и результатов](docs/experiments/README.md)
 - [Обновление документации при изменении поведения](CONTRIBUTING.md)
 
 ## Данные и безопасность
