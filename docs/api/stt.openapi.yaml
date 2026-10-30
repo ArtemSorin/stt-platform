@@ -90,6 +90,7 @@ paths:
       tags: [Браузерное интервью]
       operationId: sendEnrollmentAudio
       summary: Передать кадр эталонного аудио
+      description: В основном браузерном сценарии эталон кандидата записывается из системного звука.
       parameters:
         - $ref: '#/components/parameters/SessionIdRequired'
         - $ref: '#/components/parameters/Sequence'

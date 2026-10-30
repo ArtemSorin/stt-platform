@@ -190,7 +190,7 @@ public final class DiarizationSession {
         try {
             session = new LiveSession(diarizer, extractor, candidate, props.threshold(), outputDir,
                     "browser_mixed_microphone_system_audio", "browser_mixed_stream",
-                    "browser_mixed_microphone_system_audio", "browser microphone + system audio",
+                    "browser_system_audio", "browser microphone + system audio",
                     Pcm.RATE, 1, seconds, .64, props.settleSeconds(), (System.nanoTime() - startupAt) / 1e9,
                     props.preset(), metrics());
             error = null;
