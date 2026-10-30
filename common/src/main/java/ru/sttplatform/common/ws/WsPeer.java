@@ -131,6 +131,14 @@ public final class WsPeer implements WebSocket.Listener {
         }
     }
 
+    /** Прерывает соединение, не ожидая зависшую отправку.
+     * Используется, когда отставание необязательного потока нельзя задерживать.
+     */
+    public void abort() {
+        WebSocket current = socket;
+        if (current != null) current.abort();
+    }
+
     /**
      * Ждёт закрытия соединения.
      *

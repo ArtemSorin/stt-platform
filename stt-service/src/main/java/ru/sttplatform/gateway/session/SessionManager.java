@@ -46,6 +46,7 @@ public class SessionManager {
         Orchestrator orchestrator;
         DiarizationSession diarization;
         long expectedEnrollSequence, expectedLiveSequence, acceptedSamples;
+        String audioMode = "mono";
         volatile boolean finalizing, done;
         volatile String phase = "enrolling";
         volatile String failure;
@@ -153,14 +154,17 @@ public class SessionManager {
      * Завершает запись эталона; при успехе подключает STT и аналитику.
      *
      * @param token идентификатор сессии
+     * @param audioMode моно или раздельные каналы
      * @return состояние (live или retry)
      */
-    public synchronized Map<String, Object> finishEnrollment(String token) {
+    public synchronized Map<String, Object> finishEnrollment(String token, String audioMode) {
+        if (!"mono".equals(audioMode) && !"channels".equals(audioMode))
+            throw new ApiException(400, "Неверный формат аудио интервью.");
         Active a = require(token);
         DiarizationSession session = requireDiarization(a);
         Map<String, Object> status;
         try {
-            session.finishEnrollment();
+            session.finishEnrollment("channels".equals(audioMode));
             status = session.status(a.id);
         } catch (SessionException error) {
             throw new ApiException(error.code(), error.getMessage());
@@ -174,7 +178,9 @@ public class SessionManager {
         try {
             a.orchestrator = new Orchestrator(Path.of(props.outputDir()).toAbsolutePath().normalize()
                     .resolve(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + "-" + a.id.substring(0, 8)),
-                    props.sttUrl(), props.analyticsUrl(), a.id, whisperClient.configured(), speechSessions, integrationProps, whisperClient);
+                    props.sttUrl(), props.analyticsUrl(), a.id, whisperClient.configured(), speechSessions, integrationProps,
+                    whisperClient, false, "", "channels".equals(audioMode));
+            a.audioMode = audioMode;
             session.setListener(event -> onDiarizationEvent(a, Json.MAPPER.valueToTree(event)));
         } catch (RuntimeException | java.io.IOException failure) {
             a.failure = failure.getMessage();
@@ -199,8 +205,41 @@ public class SessionManager {
      */
     public synchronized void liveAudio(String token, long sequence, byte[] pcm) {
         Active a = require(token);
+        acceptLive(a, sequence, pcm, null, "mono");
+    }
+
+    /** Принимает пару синхронных дорожек без смешивания.
+     * @param token идентификатор сессии
+     * @param sequence номер кадра
+     * @param interleaved PCM16: системный звук и микрофон
+     */
+    public synchronized void liveAudioChannels(String token, long sequence, byte[] interleaved) {
+        Active a = require(token);
+        AudioChannels channels = splitChannels(interleaved);
+        acceptLive(a, sequence, channels.system(), channels.microphone(), "channels");
+    }
+
+    record AudioChannels(byte[] system, byte[] microphone) {}
+
+    static AudioChannels splitChannels(byte[] interleaved) {
+        if (interleaved.length < 4 || interleaved.length % 4 != 0 || interleaved.length > 40960)
+            throw new ApiException(400, "Неверный размер пары аудиоканалов.");
+        byte[] system = new byte[interleaved.length / 2];
+        byte[] microphone = new byte[system.length];
+        for (int from = 0, to = 0; from < interleaved.length; from += 4, to += 2) {
+            system[to] = interleaved[from];
+            system[to + 1] = interleaved[from + 1];
+            microphone[to] = interleaved[from + 2];
+            microphone[to + 1] = interleaved[from + 3];
+        }
+        return new AudioChannels(system, microphone);
+    }
+
+    private void acceptLive(Active a, long sequence, byte[] pcm, byte[] microphone, String audioMode) {
         if (a.orchestrator == null || (!a.testMode && a.diarization == null) || !"live".equals(a.phase) || a.finalizing)
             throw new ApiException(409, "Анализ аудио сейчас недоступен.");
+        if (!a.audioMode.equals(audioMode))
+            throw new ApiException(409, "Формат аудио нельзя менять во время интервью.");
         if (sequence != a.expectedLiveSequence) throw new ApiException(409, "Нарушен порядок чанков интервью.");
         if (!a.testMode) {
             try {
@@ -212,7 +251,8 @@ public class SessionManager {
         }
         a.expectedLiveSequence++;
         try {
-            a.orchestrator.submit(a.acceptedSamples, pcm);
+            if (microphone == null) a.orchestrator.submit(a.acceptedSamples, pcm);
+            else a.orchestrator.submitChannels(a.acceptedSamples, pcm, microphone);
         } catch (RuntimeException e) {
             stopWithError(a, "Передача звука в STT остановилась: " + e.getMessage());
             throw new ApiException(409, a.failure);

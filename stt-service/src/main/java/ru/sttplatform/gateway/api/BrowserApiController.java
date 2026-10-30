@@ -37,6 +37,7 @@ import java.util.Set;
 public class BrowserApiController {
     /** Максимум байт одного аудиозапроса: 0,64 с PCM16 16 кГц. */
     private static final int MAX_AUDIO_BYTES = 2 * 10240;
+    private static final int MAX_CHANNEL_AUDIO_BYTES = 2 * MAX_AUDIO_BYTES;
     private static final Set<String> STOP_REASONS = Set.of("requested", "system_audio_lost", "microphone_lost", "capture_error");
 
     private final SessionManager sessions;
@@ -123,13 +124,15 @@ public class BrowserApiController {
      *
      * @param request запрос
      * @param token идентификатор сессии
+     * @param audioMode формат кадров после записи эталона
      * @return состояние
      */
     @PostMapping("/api/enrollment/finish")
     public Map<String, Object> finishEnrollment(HttpServletRequest request,
-                                                @RequestHeader(value = "X-Session-Id", required = false) String token) {
+                                                @RequestHeader(value = "X-Session-Id", required = false) String token,
+                                                @RequestHeader(value = "X-Audio-Mode", defaultValue = "mono") String audioMode) {
         checkOrigin(request);
-        return sessions.finishEnrollment(token);
+        return sessions.finishEnrollment(token, audioMode);
     }
 
     /**
@@ -147,6 +150,25 @@ public class BrowserApiController {
                                      @RequestHeader(value = "X-Sequence", required = false) String sequence) throws IOException {
         checkOrigin(request);
         sessions.liveAudio(token, number(sequence), readAudio(request));
+        return Json.map("ok", true);
+    }
+
+    /** Принимает синхронную пару PCM16: сначала системный звук, затем микрофон.
+     * @param request запрос с чередующимися сэмплами двух каналов
+     * @param token идентификатор интервью
+     * @param sequence номер пары кадров
+     * @return подтверждение приёма
+     * @throws IOException при ошибке чтения тела
+     */
+    @PostMapping("/api/audio/channels")
+    public Map<String, Object> audioChannels(HttpServletRequest request,
+            @RequestHeader(value = "X-Session-Id", required = false) String token,
+            @RequestHeader(value = "X-Sequence", required = false) String sequence) throws IOException {
+        checkOrigin(request);
+        byte[] bytes = request.getInputStream().readNBytes(MAX_CHANNEL_AUDIO_BYTES + 1);
+        if (bytes.length < 4 || bytes.length > MAX_CHANNEL_AUDIO_BYTES || bytes.length % 4 != 0)
+            throw new ApiException(400, "Ожидаются два канала PCM16 16 кГц, до 0,64 с на источник.");
+        sessions.liveAudioChannels(token, number(sequence), bytes);
         return Json.map("ok", true);
     }
 
