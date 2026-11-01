@@ -112,6 +112,11 @@ paths:
       summary: Завершить запись эталона
       parameters:
         - $ref: '#/components/parameters/SessionIdRequired'
+        - name: X-Audio-Mode
+          in: header
+          required: false
+          description: Формат последующего аудио; channels выбирает раздельный режим.
+          schema: {type: string, enum: [mono, channels], default: mono}
       responses:
         '200':
           description: live при успешном эталоне или retry, если требуется повтор
@@ -119,6 +124,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/InterviewStatus'
+        '400':
+          $ref: '#/components/responses/ApiError'
         '403':
           $ref: '#/components/responses/ApiError'
         '409':
@@ -130,12 +137,36 @@ paths:
       tags: [Браузерное интервью]
       operationId: sendInterviewAudio
       summary: Передать аудиокадр интервью
-      description: В основном режиме поток содержит микрофон и системный звук. В тестовом — только микрофон, считающийся речью кандидата.
+      description: Прежний моно-режим; в тестовом сценарии весь звук считается речью кандидата.
       parameters:
         - $ref: '#/components/parameters/SessionIdRequired'
         - $ref: '#/components/parameters/Sequence'
       requestBody:
         $ref: '#/components/requestBodies/PcmFrame'
+      responses:
+        '200':
+          $ref: '#/components/responses/Accepted'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+  /api/audio/channels:
+    post:
+      tags: [Браузерное интервью]
+      operationId: sendInterviewChannels
+      summary: Передать синхронные каналы системного звука и микрофона
+      description: Требует X-Audio-Mode channels при завершении эталона. Формат менять во время интервью нельзя.
+      parameters:
+        - $ref: '#/components/parameters/SessionIdRequired'
+        - $ref: '#/components/parameters/Sequence'
+      requestBody:
+        required: true
+        description: PCM16 little-endian, 16 кГц; чередуются системный сэмпл и сэмпл микрофона. До 0,64 с на каждый канал.
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary}
       responses:
         '200':
           $ref: '#/components/responses/Accepted'

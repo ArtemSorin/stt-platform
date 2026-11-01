@@ -174,9 +174,10 @@ public final class DiarizationSession {
     /**
      * Строит голосовой эталон и, если он получился, запускает обработку интервью.
      *
+     * @param separateChannels в диаризацию поступает только системный канал
      * @throws Exception если не удалось создать файлы результата
      */
-    public synchronized void finishEnrollment() throws Exception {
+    public synchronized void finishEnrollment(boolean separateChannels) throws Exception {
         if (!phase.equals("enrolling")) throw new SessionException(409, "Эталон уже завершён.");
         phase = "preparing";
         float[] voice = Pcm.toFloats(reference.toByteArray());
@@ -189,8 +190,9 @@ public final class DiarizationSession {
         }
         try {
             session = new LiveSession(diarizer, extractor, candidate, props.threshold(), outputDir,
-                    "browser_mixed_microphone_system_audio", "browser_mixed_stream",
-                    "browser_system_audio", "browser microphone + system audio",
+                    separateChannels ? "browser_system_audio" : "browser_mixed_microphone_system_audio",
+                    separateChannels ? "browser_separate_channels" : "browser_mixed_stream",
+                    "browser_system_audio", separateChannels ? "browser system audio" : "browser microphone + system audio",
                     Pcm.RATE, 1, seconds, .64, props.settleSeconds(), (System.nanoTime() - startupAt) / 1e9,
                     props.preset(), metrics());
             error = null;
@@ -206,7 +208,7 @@ public final class DiarizationSession {
     }
 
     /**
-     * Принимает кадр интервью (смешанный звук микрофона и компьютера). Порядок гарантирует WebSocket.
+     * Принимает кадр интервью: системный канал или прежний смешанный сигнал.
      *
      * @param bytes PCM16 16 кГц моно
      */

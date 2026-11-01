@@ -18,6 +18,35 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class WsPeerTest {
     @Test
+    void abort_does_not_wait_for_a_stalled_audio_send() throws Exception {
+        CompletableFuture<WebSocket> pending = new CompletableFuture<>();
+        CountDownLatch started = new CountDownLatch(1);
+        AtomicInteger aborts = new AtomicInteger();
+        WebSocket socket = (WebSocket) Proxy.newProxyInstance(WebSocket.class.getClassLoader(),
+                new Class<?>[]{WebSocket.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("sendBinary")) { started.countDown(); return pending; }
+                    if (method.getName().equals("abort")) {
+                        aborts.incrementAndGet();
+                        pending.completeExceptionally(new IllegalStateException("aborted"));
+                    }
+                    return null;
+                });
+        WsPeer peer = new WsPeer(ignored -> {});
+        peer.attach(socket);
+        ExecutorService worker = Executors.newSingleThreadExecutor();
+        try {
+            var send = worker.submit(() -> peer.sendAudio(new byte[]{1, 2}));
+            assertTrue(started.await(1, TimeUnit.SECONDS));
+            peer.abort();
+            assertEquals(1, aborts.get());
+            org.junit.jupiter.api.Assertions.assertThrows(java.util.concurrent.ExecutionException.class,
+                    () -> send.get(1, TimeUnit.SECONDS));
+        } finally {
+            worker.shutdownNow();
+        }
+    }
+
+    @Test
     void notifies_owner_when_remote_websocket_closes() {
         AtomicInteger closed = new AtomicInteger();
         WebSocket socket = (WebSocket) Proxy.newProxyInstance(WebSocket.class.getClassLoader(),

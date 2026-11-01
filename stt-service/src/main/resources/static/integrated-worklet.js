@@ -3,45 +3,81 @@ const MICROPHONE_GAIN = 0.8;
 const PEAK_CEILING = 0.9;
 const LOOKAHEAD_SECONDS = 0.003;
 const RELEASE_SECONDS = 0.08;
-const OUTPUT_SAMPLES = 2560; // 160 мс при 16 кГц; четыре кадра объединяются для Nemotron.
+const OUTPUT_SAMPLES = 2560; // 160 мс при 16 кГц.
+
+class PeakLimiter {
+  constructor() {
+    this.lookahead = Math.max(1, Math.round(sampleRate * LOOKAHEAD_SECONDS));
+    this.delay = new Float32Array(this.lookahead + 1);
+    this.releaseStep = 1 - Math.exp(-1 / (sampleRate * RELEASE_SECONDS));
+    this.reset();
+  }
+
+  reset() { this.head = 0; this.buffered = 0; this.gain = 1; }
+
+  push(sample) {
+    this.delay[(this.head + this.buffered) % this.delay.length] = sample;
+    this.buffered++;
+    return this.buffered === this.delay.length ? this.pop() : null;
+  }
+
+  pop() {
+    let attackGain = 1;
+    // Пик ограничивает только свой канал и не меняет громкость другого источника.
+    for (let offset = 0; offset < this.buffered; offset++) {
+      const peak = Math.abs(this.delay[(this.head + offset) % this.delay.length]);
+      if (peak > PEAK_CEILING) {
+        const target = PEAK_CEILING / peak;
+        attackGain = Math.min(attackGain, target + (1 - target) * offset / this.lookahead);
+      }
+    }
+    this.gain = Math.min(attackGain, this.gain + (1 - this.gain) * this.releaseStep);
+    const result = this.delay[this.head] * this.gain;
+    this.head = (this.head + 1) % this.delay.length;
+    this.buffered--;
+    return Math.max(-32768, Math.min(32767, Math.round(result * 32767)));
+  }
+}
 
 class MonoPcmWorklet extends AudioWorkletProcessor {
   constructor() {
     super();
     this.active = false;
     this.phase = 'enroll';
-    this.output = new Int16Array(OUTPUT_SAMPLES);
+    this.system = new PeakLimiter();
+    this.microphone = new PeakLimiter();
+    this.output = new ArrayBuffer(OUTPUT_SAMPLES * 4);
+    this.view = new DataView(this.output);
     this.used = 0;
-    this.lookaheadSamples = Math.max(1, Math.round(sampleRate * LOOKAHEAD_SECONDS));
-    this.delay = new Float32Array(this.lookaheadSamples + 1);
-    this.releaseStep = 1 - Math.exp(-1 / (sampleRate * RELEASE_SECONDS));
-    this.resetLimiter();
     this.port.onmessage = event => {
       if (event.data === 'enroll' || event.data === 'live') {
         this.phase = event.data;
         this.active = true;
         this.used = 0;
-        this.resetLimiter();
+        this.system.reset();
+        this.microphone.reset();
       } else if (event.data === 'stop') {
         this.active = false;
-        // Выдаём ожидающие сэмплы до подтверждения остановки, чтобы не потерять конец речи.
-        while (this.buffered) this.emitOldest();
+        // Оба буфера сбрасываются парами, чтобы последние сэмплы сохранили общее время.
+        while (this.system.buffered) this.emit(this.system.pop(), this.microphone.pop());
         if (this.used) this.send();
         this.port.postMessage({type: 'stopped'});
       }
     };
   }
 
-  resetLimiter() {
-    this.head = 0;
-    this.buffered = 0;
-    this.gain = 1;
-  }
-
   send() {
-    const buffer = this.output.buffer.slice(0, this.used * 2);
+    const stride = this.phase === 'live' ? 4 : 2;
+    const buffer = this.output.slice(0, this.used * stride);
     this.port.postMessage({type: 'audio', buffer}, [buffer]);
     this.used = 0;
+  }
+
+  emit(system, mic) {
+    const stride = this.phase === 'live' ? 4 : 2;
+    this.view.setInt16(this.used * stride, system, true);
+    if (this.phase === 'live') this.view.setInt16(this.used * stride + 2, mic, true);
+    if (++this.used === OUTPUT_SAMPLES) this.send();
   }
 
   mono(channels, index) {
@@ -51,42 +87,15 @@ class MonoPcmWorklet extends AudioWorkletProcessor {
     return total / channels.length;
   }
 
-  enqueue(sample) {
-    this.delay[(this.head + this.buffered) % this.delay.length] = sample;
-    this.buffered++;
-    if (this.buffered === this.delay.length) this.emitOldest();
-  }
-
-  emitOldest() {
-    let attackGain = 1;
-    // Каждый будущий пик задаёт плавный спуск усиления; к самому пику оно достигает нужного уровня.
-    for (let offset = 0; offset < this.buffered; offset++) {
-      const peak = Math.abs(this.delay[(this.head + offset) % this.delay.length]);
-      if (peak > PEAK_CEILING) {
-        const target = PEAK_CEILING / peak;
-        const ramp = target + (1 - target) * offset / this.lookaheadSamples;
-        attackGain = Math.min(attackGain, ramp);
-      }
-    }
-    // После пика усиление возвращается к единице медленнее, чем уменьшается перед пиком.
-    this.gain = Math.min(attackGain, this.gain + (1 - this.gain) * this.releaseStep);
-    const limited = this.delay[this.head] * this.gain;
-    this.output[this.used++] = Math.max(-32768, Math.min(32767, Math.round(limited * 32767)));
-    this.head = (this.head + 1) % this.delay.length;
-    this.buffered--;
-    if (this.used === this.output.length) this.send();
-  }
-
   process(inputs, outputs) {
     const system = inputs[0] || [];
     const microphone = inputs[1] || [];
     if (this.active) {
       const frames = system[0]?.length || microphone[0]?.length || outputs[0]?.[0]?.length || 128;
       for (let i = 0; i < frames; i++) {
-        const computer = this.mono(system, i) * SYSTEM_GAIN;
-        // Эталон записывается только из звука компьютера, где слышен кандидат.
-        const mic = this.phase === 'live' ? this.mono(microphone, i) * MICROPHONE_GAIN : 0;
-        this.enqueue(computer + mic);
+        const computer = this.system.push(this.mono(system, i) * SYSTEM_GAIN);
+        const mic = this.microphone.push(this.phase === 'live' ? this.mono(microphone, i) * MICROPHONE_GAIN : 0);
+        if (computer !== null) this.emit(computer, mic);
       }
     }
     for (const output of outputs) for (const channel of output) channel.fill(0);

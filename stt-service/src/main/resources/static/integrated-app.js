@@ -123,7 +123,10 @@ function renderTranscript(integration) {
     }
     if (line) target.append(line);
   }
-  $('partial').textContent = integration.mixed_partial
+  const partials = integration.channel_partials;
+  const partialText = partials ? [partials.system && `Кандидат/система · ${partials.system}`,
+    partials.microphone && `Интервьюер · ${partials.microphone}`].filter(Boolean).join(' | ') : '';
+  $('partial').textContent = partialText ? `${partialText} (предварительно)` : integration.mixed_partial
     ? `${integration.current_role || 'Не определено'} · ${integration.mixed_partial} (предварительно)`
     : 'Промежуточный текст Vosk появится во время речи.';
 }
@@ -140,6 +143,8 @@ function render(status) {
   if (status.output_dir) $('output').textContent = status.output_dir;
   if (status.error) showError(status.error);
   if (integration.bridge_error) showError(integration.bridge_error);
+  if (integration.microphone_warning) showError(integration.microphone_warning);
+  if (integration.candidate_warning) showError(integration.candidate_warning);
   renderTranscript(integration);
   renderFinalReport(integration.report, integration.excel, phase);
 
@@ -375,7 +380,7 @@ async function prepareAudio() {
   worklet.port.onmessage = event => {
     if (event.data.type === 'stopped') { stopResolver?.(); stopResolver = undefined; return; }
     if (event.data.type !== 'audio') return;
-    const path = mode === 'enroll' ? '/api/enrollment/audio' : '/api/audio';
+    const path = mode === 'enroll' ? '/api/enrollment/audio' : '/api/audio/channels';
     const number = sequence++;
     pending = pending.then(() => request(path, event.data.buffer, {'X-Sequence':String(number)}));
     pending.catch(error => { showError(error.message); if (mode === 'live') sourceLost('capture_error'); });
@@ -388,7 +393,12 @@ async function prepareAudio() {
     else return sourceLost('capture_error');
   };
   video.onended = systemAudio.onended = () => sourceLost('system_audio_lost');
-  microphone.onended = () => sourceLost('microphone_lost');
+  microphone.onended = () => {
+    if (closing || mode === 'idle' || mode === 'done') return;
+    // Прекращённая дорожка даёт тишину; системный канал продолжает записываться.
+    showError('Микрофон отключился. Речь кандидата продолжает обрабатываться, но речь интервьюера не записывается.');
+    log('Микрофон отключился; системный звук остаётся активным.');
+  };
   await context.resume();
   if (!systemAudioAvailable()) throw new Error('Демонстрация экрана или системный звук прервались до начала.');
 }
@@ -426,13 +436,13 @@ async function finishEnrollment() {
   try {
     await stopAudio(); mode = 'preparing'; await pending;
     if (!systemAudioAvailable()) { await sourceLost('system_audio_lost'); return; }
-    const status = await request('/api/enrollment/finish', new Uint8Array());
+    const status = await request('/api/enrollment/finish', new Uint8Array(), {'X-Audio-Mode':'channels'});
     if (status.phase === 'retry') { render(status); mode = 'retry'; releaseAudio(); return; }
     if (status.phase !== 'live') throw new Error(status.error || 'Не удалось начать анализ.');
     pending = Promise.resolve(); sequence = 0; mode = 'live'; startTime = performance.now(); worklet.port.postMessage('live');
     render(status);
     $('hint').textContent = 'Эталон готов. TTS задаст первый вопрос, затем автоматически откроется анализ ответа.';
-    enroll.disabled = true; finish.disabled = false; log('Эталон принят, Nemotron и STT начали одну потоковую сессию');
+    enroll.disabled = true; finish.disabled = false; log('Эталон принят, оба источника передаются в STT раздельно');
   } catch (error) {
     showError(error.message);
     if (sessionId) try { await request('/api/finish', new Uint8Array(), {'X-Stop-Reason':'capture_error'}); } catch (_) {}

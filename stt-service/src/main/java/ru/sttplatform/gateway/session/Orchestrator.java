@@ -43,6 +43,8 @@ public final class Orchestrator implements AutoCloseable {
     // очередь должна вмещать ответ длиннее десяти секунд.
     private static final int CANDIDATE_QUEUE_CAPACITY = 512;
     private static final int HOLD_SAMPLES = RATE;
+    private static final int MAX_UNCONFIRMED_SAMPLES = 30 * RATE;
+    private static final double VOICE_RMS_FLOOR = 250;
     private static final byte[] END = new byte[0];
     private static final CandidateBlock CANDIDATE_END = new CandidateBlock(0, new byte[0], "end");
     /** Элемент упорядоченной очереди аудио кандидата и управляющих сигналов.
@@ -60,7 +62,8 @@ public final class Orchestrator implements AutoCloseable {
      *
      * @version 1.0.0
      */
-    private record VoiceSpan(long start, long end, String label, String speaker, boolean preliminary) {}
+    record VoiceSpan(long start, long end, String label, String speaker, boolean preliminary) {}
+    record SampleRange(long start, long end) {}
     /** Фрагмент речи, ожидающий окончательного подтверждения роли.
      *
      * @version 1.0.0
@@ -73,9 +76,11 @@ public final class Orchestrator implements AutoCloseable {
     private final Path directory;
     private final BufferedWriter sttLog, timelineLog;
     private final ArrayBlockingQueue<byte[]> sttQueue = new ArrayBlockingQueue<>(128);
+    private final ArrayBlockingQueue<byte[]> microphoneQueue = new ArrayBlockingQueue<>(128);
     private final ArrayBlockingQueue<CandidateBlock> candidateQueue = new ArrayBlockingQueue<>(CANDIDATE_QUEUE_CAPACITY);
     private final ArrayDeque<AudioBlock> audio = new ArrayDeque<>();
     private final List<VoiceSpan> spans = new ArrayList<>();
+    private final List<SampleRange> candidateDispatchedRanges = new ArrayList<>();
     private final Map<String, PendingSpan> pendingSpans = new HashMap<>();
     private final Map<String, Integer> activePreviewVotes = new HashMap<>();
     private final Map<String, String> activePreviewLabels = new HashMap<>();
@@ -92,6 +97,7 @@ public final class Orchestrator implements AutoCloseable {
     private final List<Double> roleWaitLatencies = new ArrayList<>();
     private final List<Double> voskLatencies = new ArrayList<>();
     private final List<Double> partialLatencies = new ArrayList<>();
+    private final List<Double> microphonePartialLatencies = new ArrayList<>(), microphoneFinalLatencies = new ArrayList<>();
     private final List<Double> previewLatencies = new ArrayList<>();
     private final List<Double> endToPreliminaryHintLatencies = new ArrayList<>();
     private final List<Double> preliminaryHintLeadLatencies = new ArrayList<>();
@@ -112,13 +118,14 @@ public final class Orchestrator implements AutoCloseable {
     private final List<Double> systemCpuLoadPercent = new CopyOnWriteArrayList<>();
     private final CountDownLatch reportReceived = new CountDownLatch(1);
     private final long startedNanos = System.nanoTime();
-    private final WsPeer stt, interview;
+    private final WsPeer stt, microphoneStt, interview;
     private final SpeechSessionFactory candidateSpeechFactory;
     private final IntegrationProperties integrationProps;
     private final WhisperClient whisperClient;
     private final String sessionId;
     private final boolean whisperEnabled;
     private final boolean testMode;
+    private final boolean separateChannels;
     private final String candidateName;
     private final String internalToken = System.getenv().getOrDefault("INTERVIEW_EVENTS_TOKEN", "");
     private final Object analyticsSendLock = new Object();
@@ -126,7 +133,7 @@ public final class Orchestrator implements AutoCloseable {
     private long expectedAnalyticsSequence = 1;
     private long nextAttemptId;
     private volatile long currentAttemptId;
-    private final Thread sttWorker, candidateWorker;
+    private final Thread sttWorker, microphoneWorker, candidateWorker;
     private final ByteArrayOutputStream candidateAnswerAudio = new ByteArrayOutputStream();
     private final Set<Integer> cancelledWhisperAnswers = ConcurrentHashMap.newKeySet();
     private volatile int lastWhisperAnswerId;
@@ -137,7 +144,8 @@ public final class Orchestrator implements AutoCloseable {
     private long nextEventId;
     private long nextPeekRequestId;
     private long lastAppliedPeekRequestId;
-    private volatile String mixedPartial = "", whisperState = "выключен", failure;
+    private volatile String mixedPartial = "", microphonePartial = "", whisperState = "выключен", failure;
+    private volatile String microphoneWarning, candidateWarning;
     private volatile String currentRole = "Ожидаем речь";
     private final StringBuilder mixedTranscript = new StringBuilder();
     private volatile Map<String, Object> question, decision, refined, preview, finalReport;
@@ -152,11 +160,14 @@ public final class Orchestrator implements AutoCloseable {
     private String lastPeekText = "";
     private volatile boolean closed;
     private volatile boolean finishing;
+    private boolean answerArmed;
     private volatile boolean decisionRetracted;
     private volatile boolean lastPeekCandidateEvidence;
     private int sttEvents, candidateBlocks, unknownWords, lateCandidateSegments;
     private long sttQueueOverflowCount, candidateQueueOverflowCount, candidateQueueDroppedSamples;
     private long candidateQueueDroppedSpeechSamples, maxSttQueueDepth, maxCandidateQueueDepth;
+    private long microphoneFrames, microphoneSamples, microphoneQueueOverflows, maxMicrophoneQueueDepth;
+    private long systemFrames, lastMicrophonePartialSample;
 
     /** Создаёт оркестратор основного сценария с включённой диаризацией.
      * @param directory каталог артефактов сессии
@@ -213,10 +224,23 @@ public final class Orchestrator implements AutoCloseable {
                         String sessionId, boolean whisperEnabled, SpeechSessionFactory candidateSpeechFactory,
                         IntegrationProperties integrationProps, WhisperClient whisperClient,
                         boolean testMode, String candidateName) throws java.io.IOException {
+        this(directory, sttBaseUrl, analyticsBaseUrl, sessionId, whisperEnabled, candidateSpeechFactory,
+                integrationProps, whisperClient, testMode, candidateName, false);
+    }
+
+    /** Открывает отдельный поток микрофона, если браузер передаёт два канала.
+     * @param separateChannels включить независимое распознавание источников
+     * @throws java.io.IOException если не удалось создать журналы
+     */
+    public Orchestrator(Path directory, String sttBaseUrl, String analyticsBaseUrl,
+                        String sessionId, boolean whisperEnabled, SpeechSessionFactory candidateSpeechFactory,
+                        IntegrationProperties integrationProps, WhisperClient whisperClient,
+                        boolean testMode, String candidateName, boolean separateChannels) throws java.io.IOException {
         this.directory = directory;
         this.sessionId = sessionId;
         this.whisperEnabled = whisperEnabled;
         this.testMode = testMode;
+        this.separateChannels = separateChannels;
         this.candidateName = candidateName == null ? "" : candidateName;
         if (testMode) currentRole = "Кандидат · тестовый режим без диаризации";
         this.candidateSpeechFactory = candidateSpeechFactory;
@@ -225,21 +249,33 @@ public final class Orchestrator implements AutoCloseable {
         Files.createDirectories(directory);
         sttLog = Files.newBufferedWriter(directory.resolve("stt-events.jsonl"), StandardCharsets.UTF_8);
         timelineLog = Files.newBufferedWriter(directory.resolve("timeline-events.jsonl"), StandardCharsets.UTF_8);
+        WsPeer openedStt = null, openedMicrophone = null, openedInterview = null;
         try {
             if (internalToken.length() < 32)
                 throw new IllegalStateException("Задайте общий секрет INTERVIEW_EVENTS_TOKEN длиной не менее 32 символов.");
-            stt = WsPeer.connect(wsUrl(sttBaseUrl) + "/ws/stt", json -> onStt("mixed", json),
-                    () -> onPeerClosed("vosk-mixed", "Потоковый STT закрыл WebSocket."));
-            interview = WsPeer.connect(wsUrl(analyticsBaseUrl) + "/ws/interview-events",
+            openedStt = WsPeer.connect(wsUrl(sttBaseUrl) + "/ws/stt", json -> onStt(separateChannels ? "system" : "mixed", json),
+                    () -> onPeerClosed("vosk-system", "Потоковый STT закрыл WebSocket."));
+            openedMicrophone = separateChannels ? WsPeer.connect(wsUrl(sttBaseUrl) + "/ws/stt",
+                    Map.of("X-Audio-Source", "microphone"),
+                    json -> onStt("microphone", json),
+                    () -> onPeerClosed("vosk-microphone", "Поток распознавания микрофона закрыт.")) : null;
+            openedInterview = WsPeer.connect(wsUrl(analyticsBaseUrl) + "/ws/interview-events",
                     Map.of("X-Internal-Token", internalToken), this::onInterview,
                     () -> onPeerClosed("analytics", "Внутренний WebSocket аналитики закрыт."));
         } catch (Exception error) {
+            if (openedStt != null) try { openedStt.sendClose(1000, "startup failed"); } catch (Exception ignored) {}
+            if (openedMicrophone != null) try { openedMicrophone.sendClose(1000, "startup failed"); } catch (Exception ignored) {}
+            if (openedInterview != null) try { openedInterview.sendClose(1000, "startup failed"); } catch (Exception ignored) {}
             sttLog.close();
             timelineLog.close();
             throw new IllegalStateException("Не удалось подключиться к stt-service (" + sttBaseUrl
                     + ") или analytics-service (" + analyticsBaseUrl + "). Сначала запустите эти сервисы.", error);
         }
-        sttWorker = worker("vosk-mixed", sttQueue, stt);
+        stt = openedStt;
+        microphoneStt = openedMicrophone;
+        interview = openedInterview;
+        sttWorker = worker("vosk-system", sttQueue, stt);
+        microphoneWorker = separateChannels ? worker("vosk-microphone", microphoneQueue, microphoneStt) : null;
         candidateWorker = candidateWorker();
         cpuSampler = new Thread(this::sampleCpuLoad, "integration-cpu-load");
         cpuSampler.setDaemon(true);
@@ -256,7 +292,12 @@ public final class Orchestrator implements AutoCloseable {
     }
 
     private void onPeerClosed(String worker, String message) {
-        if (closed || (finishing && "vosk-mixed".equals(worker))) return;
+        if (closed || finishing) return;
+        if ("vosk-microphone".equals(worker)) {
+            microphoneWarning = message;
+            logQuietly(Json.map("type", "microphone_error", "error", message));
+            return;
+        }
         failure = message;
         logQuietly(Json.map("type", "bridge_error", "worker", worker, "error", message));
     }
@@ -287,8 +328,13 @@ public final class Orchestrator implements AutoCloseable {
                     peer.sendAudio(block);
                 }
             } catch (Throwable error) {
-                failure = name + ": " + error;
-                logQuietly(Json.map("type", "bridge_error", "worker", name, "error", failure));
+                if ("vosk-microphone".equals(name)) {
+                    microphoneWarning = "Распознавание микрофона остановлено: " + error;
+                    logQuietly(Json.map("type", "microphone_error", "error", microphoneWarning));
+                } else {
+                    failure = name + ": " + error;
+                    logQuietly(Json.map("type", "bridge_error", "worker", name, "error", failure));
+                }
             }
         }, name);
         thread.setDaemon(true);
@@ -422,6 +468,7 @@ public final class Orchestrator implements AutoCloseable {
             throw new IllegalStateException(failure);
         }
         maxSttQueueDepth = Math.max(maxSttQueueDepth, sttQueue.size());
+        systemFrames++;
         capturedSamples += block.length / 2;
         lastCapturedNanos = System.nanoTime();
         if (testMode) {
@@ -439,6 +486,30 @@ public final class Orchestrator implements AutoCloseable {
         audio.addLast(new AudioBlock(firstSample, block));
     }
 
+    /** Принимает синхронную пару моно-кадров; очередь микрофона не блокирует кандидата.
+     * @param firstSample позиция первого сэмпла обоих источников
+     * @param system системный звук в PCM16
+     * @param microphone микрофон в PCM16
+     */
+    public synchronized void submitChannels(long firstSample, byte[] system, byte[] microphone) {
+        if (!separateChannels || system.length != microphone.length)
+            throw new IllegalStateException("Неверная пара аудиоканалов.");
+        submit(firstSample, system);
+        microphoneFrames++;
+        microphoneSamples += microphone.length / 2L;
+        if (microphoneWarning != null) return;
+        if (!microphoneQueue.offer(microphone)) {
+            microphoneQueueOverflows++;
+            microphoneWarning = "Распознавание микрофона отстало; текст интервьюера может быть неполным.";
+            microphoneQueue.clear();
+            microphoneStt.abort();
+            microphoneWorker.interrupt();
+            logQuietly(Json.map("type", "microphone_overflow", "audio_start_s", firstSample / (double) RATE));
+            return;
+        }
+        maxMicrophoneQueueDepth = Math.max(maxMicrophoneQueueDepth, microphoneQueue.size());
+    }
+
     /** Сопоставляет новые интервалы говорящих со словами общего потока Vosk.
      * @param segments новые сегменты диаризации
      * @param activeSegments текущие предварительные интервалы говорящих
@@ -448,6 +519,7 @@ public final class Orchestrator implements AutoCloseable {
     public synchronized void onDiarization(List<Map<String, Object>> segments,
                                            List<Map<String, Object>> activeSegments,
                                            double audioSeconds, boolean flush) {
+        if (closed) return;
         for (Map<String, Object> row : segments) {
             long start = Math.round(((Number) row.get("start")).doubleValue() * RATE);
             long end = Math.round(((Number) row.get("end")).doubleValue() * RATE);
@@ -482,8 +554,12 @@ public final class Orchestrator implements AutoCloseable {
             }
         if ("Кандидат".equals(label)) {
                 lastCandidateEnd = Math.max(lastCandidateEnd, end);
-                if (start < gatedSamples) {
+                boolean lateForAnswer = hasUnsentCandidateAudio(Math.max(start, answerStartSample),
+                        Math.min(end, gatedSamples), candidateDispatchedRanges);
+                if (start < gatedSamples && (!separateChannels || lateForAnswer)) {
                     lateCandidateSegments++;
+                    if (separateChannels && answerArmed)
+                        candidateWarning = "Часть речи кандидата подтверждена после передачи аудио; проверьте ответ.";
                     logQuietly(Json.map("type", "late_candidate_role", "start_s", start / (double) RATE,
                             "end_s", end / (double) RATE,
                             "already_gated_to_s", gatedSamples / (double) RATE));
@@ -564,6 +640,12 @@ public final class Orchestrator implements AutoCloseable {
                 iter.remove();
             }
         } else pendingSpans.clear();
+        if (separateChannels && answerArmed && !flush && !audio.isEmpty()
+                && capturedSamples - Math.max(audio.peekFirst().first(), answerStartSample) > MAX_UNCONFIRMED_SAMPLES) {
+            candidateWarning = "Роль говорящего слишком долго не подтверждается; часть ответа может отсутствовать.";
+            failure = "Диаризация не успевает подтвердить роль для накопленного аудио.";
+            throw new IllegalStateException(failure);
+        }
         long target = flush ? capturedSamples : Math.min(capturedSamples,
                 Math.max(0, Math.round(audioSeconds * RATE) - HOLD_SAMPLES));
         if (!flush) {
@@ -571,30 +653,19 @@ public final class Orchestrator implements AutoCloseable {
                 target = Math.min(target, pending.start);
         }
         while (!audio.isEmpty() && audio.peekFirst().end() <= target) {
-            AudioBlock block = audio.removeFirst();
-            byte[] gated = new byte[block.mixed().length];
-            for (VoiceSpan span : spans) {
-                // Предварительная роль разрешает только read-only peek.
-                // Анализ ответа с изменением состояния получает подтверждённую роль.
-                if (!"Кандидат".equals(span.label()) || span.preliminary()) continue;
-                long left = Math.max(block.first(), span.start());
-                long right = Math.min(block.end(), span.end());
-                if (right > left) System.arraycopy(block.mixed(), (int) ((left - block.first()) * 2),
-                        gated, (int) ((left - block.first()) * 2), (int) ((right - left) * 2));
+            AudioBlock block = audio.peekFirst();
+            if (separateChannels && answerArmed && block.end() > answerStartSample
+                    && awaitsVoiceRole(block.first(), block.mixed(), spans)) {
+                // Не отправляем громкий неподтверждённый звук как тишину: начало речи может подтвердиться позже.
+                if (!flush && capturedSamples - block.first() < MAX_UNCONFIRMED_SAMPLES) break;
+                candidateWarning = "Часть системного звука не удалось подтвердить как речь кандидата; проверьте расшифровку.";
+                if (!flush) {
+                    failure = "Диаризация не подтвердила роль для накопленного аудио кандидата.";
+                    throw new IllegalStateException(failure);
+                }
             }
-            // При наложении голосов смешанный звук нельзя считать речью кандидата.
-            for (VoiceSpan span : spans) {
-                if ("Кандидат".equals(span.label())) continue;
-                long left = Math.max(block.first(), span.start());
-                long right = Math.min(block.end(), span.end());
-                if (right > left) java.util.Arrays.fill(gated, (int) ((left - block.first()) * 2),
-                        (int) ((right - block.first()) * 2), (byte) 0);
-            }
-            // Отсекаем звук до передачи текущего вопроса кандидату: иначе TTS
-            // или предыдущий ответ могут попасть в детектор после маркера READY.
-            long preAnswerEnd = Math.min(block.end(), answerStartSample);
-            if (preAnswerEnd > block.first())
-                java.util.Arrays.fill(gated, 0, (int) ((preAnswerEnd - block.first()) * 2), (byte) 0);
+            audio.removeFirst();
+            byte[] gated = gateCandidateAudio(block.first(), block.mixed(), spans, answerStartSample, separateChannels);
             boolean enqueued = candidateQueue.offer(new CandidateBlock(block.first(), gated, null));
             boolean candidateSpeech = !Pcm.isSilent(gated);
             if (!enqueued) {
@@ -611,6 +682,7 @@ public final class Orchestrator implements AutoCloseable {
             } else {
                 candidateBlocks++;
                 maxCandidateQueueDepth = Math.max(maxCandidateQueueDepth, candidateQueue.size());
+                if (separateChannels) rememberDispatchedCandidate(block.first(), block.end());
             }
             if (enqueued && candidateSpeech && block.end() > lastCandidateDispatchSample) {
                 candidateDispatchLatencies.add(Math.max(0,
@@ -622,6 +694,69 @@ public final class Orchestrator implements AutoCloseable {
             gatedSamples = block.end();
         }
         writeSummary(false);
+    }
+
+    private void rememberDispatchedCandidate(long first, long end) {
+        List<SampleRange> ranges = spans.stream()
+                .filter(span -> "Кандидат".equals(span.label()) && !span.preliminary())
+                .map(span -> new SampleRange(Math.max(Math.max(first, answerStartSample), span.start()),
+                        Math.min(end, span.end())))
+                .filter(range -> range.end() > range.start())
+                .sorted(java.util.Comparator.comparingLong(SampleRange::start)).toList();
+        for (SampleRange range : ranges) {
+            int last = candidateDispatchedRanges.size() - 1;
+            if (last >= 0 && candidateDispatchedRanges.get(last).end() >= range.start()) {
+                SampleRange previous = candidateDispatchedRanges.get(last);
+                candidateDispatchedRanges.set(last, new SampleRange(previous.start(), Math.max(previous.end(), range.end())));
+            } else candidateDispatchedRanges.add(range);
+        }
+    }
+
+    static boolean hasUnsentCandidateAudio(long start, long end, List<SampleRange> sent) {
+        if (end <= start) return false;
+        long position = start;
+        // Допускаем две миллисекунды округления границ диаризации.
+        long tolerance = RATE / 500L;
+        for (SampleRange range : sent) {
+            if (range.end() <= position) continue;
+            if (range.start() > position + tolerance) return true;
+            position = Math.max(position, range.end());
+            if (position + tolerance >= end) return false;
+        }
+        return position + tolerance < end;
+    }
+
+    static boolean awaitsVoiceRole(long first, byte[] pcm, List<VoiceSpan> spans) {
+        if (rms(pcm) < VOICE_RMS_FLOOR) return false;
+        long end = first + pcm.length / 2L;
+        for (VoiceSpan span : spans) {
+            if (!span.preliminary() && isSpeakerRole(span.label())
+                    && Math.min(end, span.end()) > Math.max(first, span.start())) return false;
+        }
+        return true;
+    }
+
+    static byte[] gateCandidateAudio(long first, byte[] pcm, List<VoiceSpan> spans,
+                                     long answerStart, boolean separateChannels) {
+        long end = first + pcm.length / 2L;
+        byte[] gated = new byte[pcm.length];
+        for (VoiceSpan span : spans) {
+            // Предварительная роль годится для подсказки, но не для изменения состояния аналитики.
+            if (!"Кандидат".equals(span.label()) || span.preliminary()) continue;
+            long left = Math.max(first, span.start()), right = Math.min(end, span.end());
+            if (right > left) System.arraycopy(pcm, (int) ((left - first) * 2), gated,
+                    (int) ((left - first) * 2), (int) ((right - left) * 2));
+        }
+        // В смешанном режиме речь другого человека загрязняет общий сигнал.
+        if (!separateChannels) for (VoiceSpan span : spans) {
+            if ("Кандидат".equals(span.label())) continue;
+            long left = Math.max(first, span.start()), right = Math.min(end, span.end());
+            if (right > left) java.util.Arrays.fill(gated, (int) ((left - first) * 2),
+                    (int) ((right - first) * 2), (byte) 0);
+        }
+        long beforeAnswer = Math.min(end, answerStart);
+        if (beforeAnswer > first) java.util.Arrays.fill(gated, 0, (int) ((beforeAnswer - first) * 2), (byte) 0);
+        return gated;
     }
 
     private static boolean isSpeakerRole(String label) {
@@ -648,6 +783,7 @@ public final class Orchestrator implements AutoCloseable {
         if (question == null) throw new IllegalStateException("Сервис аналитики ещё не выдал вопрос.");
         readySample = capturedSamples;
         answerStartSample = readySample;
+        answerArmed = true;
         preview = null;
         lastPeekCandidateEvidence = false;
         lastPeekText = "";
@@ -660,6 +796,7 @@ public final class Orchestrator implements AutoCloseable {
 
     /** Закрывает текущую попытку без добавления аудиоданных ответа. */
     public synchronized void questionSkipped() {
+        answerArmed = false;
         if (!candidateQueue.offer(new CandidateBlock(capturedSamples, new byte[0], "skip")))
             throw new IllegalStateException("Очередь кандидата занята.");
         logQuietly(Json.map("type", "question_skipped", "audio_s", capturedSamples / (double) RATE));
@@ -672,6 +809,7 @@ public final class Orchestrator implements AutoCloseable {
      * @param voiceLang язык синтеза
      */
     public synchronized void ttsEvent(String event, String questionText, String voice, String voiceLang) {
+        if (closed) return;
         if (!List.of("start", "finish", "cancel", "error").contains(event)) return;
         if ("finish".equals(event)) {
             sendAnalytics(Json.map("type", "tts_end", "afterMs",
@@ -688,7 +826,7 @@ public final class Orchestrator implements AutoCloseable {
      * @param id идентификатор события предварительной подсказки
      */
     public synchronized void suggestionSeen(String id) {
-        if (id == null) return;
+        if (id == null || closed) return;
         if (id.equals(previewEventId)) {
             if (!seenUiEvents.add(id)) return;
             long sample = previewEventSamples.getOrDefault(id, lastPeekSample);
@@ -721,13 +859,16 @@ public final class Orchestrator implements AutoCloseable {
 
     private synchronized void onStt(String source, JsonNode data) {
         if (closed) return;
+        boolean microphone = "microphone".equals(source);
         String type = data.path("type").asText();
+        if (!"partial".equals(type) && !"final".equals(type)) return;
         String text = data.path("text").asText("");
-        if ("final".equals(type) && !text.isBlank()) {
+        if (!microphone && "final".equals(type) && !text.isBlank()) {
             if (mixedTranscript.length() > 0) mixedTranscript.append(' ');
             mixedTranscript.append(text);
         }
-        mixedPartial = "final".equals(type) ? "" : text;
+        if (microphone) microphonePartial = "final".equals(type) ? "" : text;
+        else mixedPartial = "final".equals(type) ? "" : text;
         List<Map<String, Object>> words = new ArrayList<>();
         int utterance = utteranceNumbers.getOrDefault(source, 0);
         for (JsonNode word : data.path("words")) {
@@ -737,30 +878,33 @@ public final class Orchestrator implements AutoCloseable {
                     "word_id", source + ":" + utterance + ":" + words.size(),
                     "start", Json.round(start / (double) RATE, 3),
                     "end", Json.round(end / (double) RATE, 3),
-                    "role", role(start, end), "role_status", roleStatus(start, end),
-                    "source", "mixed", "model", "vosk",
+                    "role", microphone ? "Интервьюер 1" : role(start, end),
+                    "role_status", microphone ? "confirmed" : roleStatus(start, end),
+                    "source", source, "model", "vosk",
                     "status", "final".equals(type) ? "final" : "preliminary",
                     "confidence", word.hasNonNull("confidence") ? word.path("confidence").asDouble() : null);
             words.add(row);
             if ("final".equals(type)) finalWords.add(row);
-            if ("final".equals(type)) voskLatencies.add(Math.max(0,
+            if ("final".equals(type)) (microphone ? microphoneFinalLatencies : voskLatencies).add(Math.max(0,
                     (System.nanoTime() - estimateCapturedAt(end)) / 1e6));
         }
         if (!text.isBlank()) {
             long sample = words.isEmpty() ? capturedSamples : Math.round(
                     ((Number) words.get(words.size() - 1).get("end")).doubleValue() * RATE);
-            if (sample > lastPartialSample) {
-                partialLatencies.add(Math.max(0, (System.nanoTime() - estimateCapturedAt(sample)) / 1e6));
-                lastPartialSample = sample;
+            if (sample > (microphone ? lastMicrophonePartialSample : lastPartialSample)) {
+                (microphone ? microphonePartialLatencies : partialLatencies)
+                        .add(Math.max(0, (System.nanoTime() - estimateCapturedAt(sample)) / 1e6));
+                if (microphone) lastMicrophonePartialSample = sample;
+                else lastPartialSample = sample;
             }
         }
         if ("final".equals(type)) {
             preliminaryWords.remove(source);
             utteranceNumbers.put(source, utterance + 1);
         } else preliminaryWords.put(source, words);
-        requestCandidatePeek();
+        if (!microphone) requestCandidatePeek();
         sttEvents++;
-        Map<String, Object> event = Json.map("type", "stt_" + type, "source", "mixed",
+        Map<String, Object> event = Json.map("type", "stt_" + type, "source", source,
                 "text", text, "words", words, "received_wall_s",
                 Json.round((System.nanoTime() - startedNanos) / 1e9, 3));
         try {
@@ -797,6 +941,7 @@ public final class Orchestrator implements AutoCloseable {
     private void reviseRoles() {
         boolean changed = false;
         for (Map<String, Object> word : currentWords()) {
+            if ("microphone".equals(word.get("source"))) continue;
             long start = Math.round(((Number) word.get("start")).doubleValue() * RATE);
             long end = Math.round(((Number) word.get("end")).doubleValue() * RATE);
             String updated = role(start, end);
@@ -818,6 +963,7 @@ public final class Orchestrator implements AutoCloseable {
     private void requestCandidatePeek() {
         List<Map<String, Object>> answerWords = currentWords().stream()
                 .filter(word -> "vosk".equals(word.get("model")) && "Кандидат".equals(word.get("role")))
+                .filter(word -> !separateChannels || "system".equals(word.get("source")))
                 .filter(word -> ((Number) word.get("start")).doubleValue() * RATE >= readySample)
                 .sorted((a, b) -> Double.compare(((Number) a.get("start")).doubleValue(),
                         ((Number) b.get("start")).doubleValue()))
@@ -1073,14 +1219,30 @@ public final class Orchestrator implements AutoCloseable {
         return Json.map("question", question, "decision", decision, "refined", refined, "preview", preview,
                 "report", finalReport, "excel", excelReport, "excel_error", excelError,
                 "audio_seconds", capturedSamples / (double) RATE,
-                "queue_depth_chunks", sttQueue.size() + candidateQueue.size(),
+                "queue_depth_chunks", sttQueue.size() + microphoneQueue.size() + candidateQueue.size(),
                 "test_mode", testMode,
                 "current_role", currentRole,
                 "decision_retracted", decisionRetracted,
                 "question_wait_ms", Math.max(0, (questionAvailableNanos - System.nanoTime()) / 1_000_000L),
                 "mixed_partial", mixedPartial, "mixed_transcript", mixedTranscript.toString(),
+                "channel_partials", separateChannels ? Json.map("system", mixedPartial, "microphone", microphonePartial) : null,
+                "channel_stats", channelStats(), "microphone_warning", microphoneWarning,
+                "candidate_warning", candidateWarning,
                 "timeline_words", new ArrayList<>(words.subList(from, words.size())),
                 "whisper_state", whisperState, "bridge_error", failure);
+    }
+
+    private Map<String, Object> channelStats() {
+        return Json.map("mode", separateChannels ? "channels" : "mono",
+                "system", Json.map("frames", systemFrames, "samples", capturedSamples,
+                        "queue_depth", sttQueue.size(), "max_queue_depth", maxSttQueueDepth,
+                        "overflow_count", sttQueueOverflowCount,
+                        "partial_latency_ms", distribution(partialLatencies), "final_latency_ms", distribution(voskLatencies)),
+                "microphone", separateChannels ? Json.map("frames", microphoneFrames, "samples", microphoneSamples,
+                        "queue_depth", microphoneQueue.size(), "max_queue_depth", maxMicrophoneQueueDepth,
+                        "overflow_count", microphoneQueueOverflows, "warning", microphoneWarning,
+                        "partial_latency_ms", distribution(microphonePartialLatencies),
+                        "final_latency_ms", distribution(microphoneFinalLatencies)) : null);
     }
 
     /** Завершает потоки распознавания и отправляет аналитику итоговые сегменты.
@@ -1100,6 +1262,11 @@ public final class Orchestrator implements AutoCloseable {
         }
         try {
             signalEnd(sttQueue, sttWorker, "Vosk");
+            if (microphoneWorker != null && microphoneWorker.isAlive()
+                    && !microphoneQueue.offer(END, 5, TimeUnit.SECONDS)) {
+                microphoneWarning = "Очередь микрофона не освободилась при завершении интервью.";
+                microphoneWorker.interrupt();
+            }
             signalCandidateEnd(candidateWorker, "анализатора кандидата");
             candidateWorker.join(30_000);
             sttWorker.join(30_000);
@@ -1112,6 +1279,23 @@ public final class Orchestrator implements AutoCloseable {
                 stt.sendText("eof");
                 if (!stt.awaitClosed(10))
                     failure = "Vosk не подтвердил окончание одного из потоков.";
+            }
+            if (microphoneWorker != null) {
+                microphoneWorker.join(30_000);
+                if (microphoneWorker.isAlive()) {
+                    microphoneWarning = "Очередь микрофона не успела завершиться; его расшифровка неполная.";
+                    microphoneStt.abort();
+                    microphoneWorker.interrupt();
+                }
+                try {
+                    if (microphoneStt.isOpen()) {
+                        microphoneStt.sendText("eof");
+                        if (!microphoneStt.awaitClosed(10))
+                            microphoneWarning = "Микрофонный STT не подтвердил окончание потока.";
+                    }
+                } catch (RuntimeException error) {
+                    microphoneWarning = "Не удалось завершить микрофонный STT: " + error.getMessage();
+                }
             }
         } catch (Throwable error) {
             if (error instanceof InterruptedException) Thread.currentThread().interrupt();
@@ -1156,6 +1340,9 @@ public final class Orchestrator implements AutoCloseable {
     private List<Map<String, Object>> currentWords() {
         List<Map<String, Object>> rows = new ArrayList<>(finalWords);
         for (List<Map<String, Object>> partial : preliminaryWords.values()) rows.addAll(partial);
+        rows.sort(java.util.Comparator.comparingDouble((Map<String, Object> word) -> ((Number) word.get("start")).doubleValue())
+                .thenComparing(word -> String.valueOf(word.get("source")))
+                .thenComparing(word -> String.valueOf(word.get("word_id"))));
         return rows;
     }
 
@@ -1164,6 +1351,8 @@ public final class Orchestrator implements AutoCloseable {
             unknownWords = (int) finalWords.stream().filter(w -> "Не определено".equals(w.get("role"))).count();
             Out.writePretty(directory.resolve("integration-summary.json"), Json.map(
                     "finished", finished, "audio_seconds", Json.round(capturedSamples / (double) RATE, 3),
+                    "channels", channelStats(),
+                    "candidate_warning", candidateWarning,
                     "vosk_events", sttEvents, "final_words", finalWords.size(), "unknown_role_words", unknownWords,
                     "candidate_audio_blocks", candidateBlocks,
                     "late_candidate_segments", lateCandidateSegments, "bridge_error", failure,
@@ -1264,6 +1453,7 @@ public final class Orchestrator implements AutoCloseable {
     }
 
     private synchronized void emit(Map<String, Object> data) {
+        if (closed) return;
         try { write(timelineLog, data); }
         catch (Exception error) { failure = error.toString(); }
     }
@@ -1276,6 +1466,12 @@ public final class Orchestrator implements AutoCloseable {
         cpuSampler.interrupt();
         try { stt.sendText("eof"); } catch (Exception ignored) {}
         try { stt.sendClose(1000, "done"); } catch (Exception ignored) {}
+        if (microphoneStt != null) {
+            try {
+                if (microphoneWarning != null) microphoneStt.abort();
+                else microphoneStt.sendClose(1000, "done");
+            } catch (Exception ignored) {}
+        }
         try { interview.sendClose(1000, "done"); } catch (Exception ignored) {}
         try { sttLog.close(); } catch (Exception ignored) {}
         try { timelineLog.close(); } catch (Exception ignored) {}

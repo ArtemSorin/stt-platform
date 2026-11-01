@@ -71,4 +71,16 @@ test('question waits out grace and browser TTS owns the handoff to answer mode',
   assert.match(element('report-counts').textContent, /2 из 2 вопросов/);
   assert.equal(element('report-questions').children.length, 1);
   assert.match(element('report-questions').children[0].children[0].textContent, /Java Core/);
+
+  context.renderForTest({phase:'live', integration:{
+    timeline_words:[{word:'кандидат', role:'Кандидат', role_status:'confirmed', source:'system'},
+      {word:'интервьюер', role:'Интервьюер 1', role_status:'confirmed', source:'microphone'}],
+    channel_partials:{system:'текст кандидата', microphone:'текст интервьюера'},
+    candidate_warning:'Роль не подтверждена'
+  }});
+  const rows = element('transcript').children;
+  assert.equal(rows[0].children[0].textContent, 'Кандидат: ');
+  assert.equal(rows[2].children[0].textContent, 'Интервьюер 1: ');
+  assert.match(element('partial').textContent, /текст кандидата.*текст интервьюера/);
+  assert.equal(element('error').textContent, 'Роль не подтверждена');
 });
