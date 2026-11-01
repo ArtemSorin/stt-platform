@@ -4,7 +4,7 @@
 
 ![C4 Container: stt-platform](diagrams/stt-platform-c4.png)
 
-Редактируемый [исходник PlantUML](diagrams/stt-platform-c4.puml); модели и подтверждённые снимки перечислены в [реестре моделей](models.md). PNG из репозитория можно отдельно использовать на доске Miro.
+Редактируемый [исходник PlantUML](diagrams/stt-platform-c4.puml); модели и подтверждённые снимки перечислены в [реестре моделей](models.md).
 
 ## Компоненты
 

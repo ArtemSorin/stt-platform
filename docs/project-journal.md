@@ -6,6 +6,7 @@
 - [Подготовка звука и разделение каналов](history/audio-processing.md)
 - [Проверка раздельных каналов](audio-channels-validation.md)
 - [Сравнение моделей Whisper](experiments/whisper-golos.md)
+- [Интеграционный тест распознавания и аналитики](experiments/integration-test.md)
 
 ## Аналитика и отчёт
 
@@ -18,5 +19,5 @@
 
 ## Демо и результаты
 
-- [Демо 20 октября: интеграционный прогон](experiments/demo-board.md)
-- [Демо 21 октября: прогон с сохранённым архивом](experiments/demo-archive.md)
+- [Первое демо — 15 октября](experiments/demo-first.md)
+- [Второе демо — 21 октября](experiments/demo-second.md)
