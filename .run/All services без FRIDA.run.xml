@@ -1,0 +1,7 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="All services без FRIDA" type="CompoundRunConfigurationType">
+    <toRun name="analytics-service-no-frida" type="SpringBootApplicationConfigurationType" />
+    <toRun name="stt-service" type="SpringBootApplicationConfigurationType" />
+    <method v="2" />
+  </configuration>
+</component>

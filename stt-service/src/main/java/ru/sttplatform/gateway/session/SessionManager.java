@@ -484,7 +484,7 @@ public class SessionManager {
             Thread.currentThread().interrupt();
             a.failure = "Завершение интервью прервано.";
         } catch (Throwable e) {
-            a.failure = "Не удалось завершить интервью: " + e;
+            if (a.failure == null) a.failure = "Не удалось завершить интервью: " + e;
             log.error("Завершение интервью", e);
         } finally {
             a.orchestrator.close();
@@ -510,6 +510,7 @@ public class SessionManager {
 
     private void stopWithError(Active a, String message) {
         a.failure = message;
+        log.warn("Интервью остановлено: {}", message);
         if (a.testMode) {
             finish(a.id, "capture_error");
             return;

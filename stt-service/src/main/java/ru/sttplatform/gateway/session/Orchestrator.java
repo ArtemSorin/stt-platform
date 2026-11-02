@@ -43,7 +43,8 @@ public final class Orchestrator implements AutoCloseable {
     // очередь должна вмещать ответ длиннее десяти секунд.
     private static final int CANDIDATE_QUEUE_CAPACITY = 512;
     private static final int HOLD_SAMPLES = RATE;
-    private static final int MAX_UNCONFIRMED_SAMPLES = 30 * RATE;
+    // Длинная непрерывная речь может получить окончательную роль только после паузы.
+    private static final int MAX_UNCONFIRMED_SAMPLES = 120 * RATE;
     private static final double VOICE_RMS_FLOOR = 250;
     private static final byte[] END = new byte[0];
     private static final CandidateBlock CANDIDATE_END = new CandidateBlock(0, new byte[0], "end");
@@ -297,7 +298,7 @@ public final class Orchestrator implements AutoCloseable {
     private void onPeerClosed(String worker, String message) {
         if (closed || finishing) return;
         if ("vosk-microphone".equals(worker)) {
-            microphoneWarning = message;
+            if (microphoneWarning == null) microphoneWarning = message;
             logQuietly(Json.map("type", "microphone_error", "error", message));
             return;
         }
@@ -332,8 +333,9 @@ public final class Orchestrator implements AutoCloseable {
                 }
             } catch (Throwable error) {
                 if ("vosk-microphone".equals(name)) {
-                    microphoneWarning = "Распознавание микрофона остановлено: " + error;
-                    logQuietly(Json.map("type", "microphone_error", "error", microphoneWarning));
+                    String message = "Распознавание микрофона остановлено: " + error;
+                    if (microphoneWarning == null) microphoneWarning = message;
+                    logQuietly(Json.map("type", "microphone_error", "error", message));
                 } else {
                     failure = name + ": " + error;
                     logQuietly(Json.map("type", "bridge_error", "worker", name, "error", failure));
