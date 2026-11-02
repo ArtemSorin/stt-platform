@@ -2,7 +2,7 @@
 
 ## STT, звук и диаризация
 
-- [Захват звука, распознавание и определение говорящего](history/stt-diarization.md)
+- [Захват звука, распознавание, определение говорящего и полная транскрипция](history/stt-diarization.md)
 - [Подготовка звука и разделение каналов](history/audio-processing.md)
 - [Проверка раздельных каналов](audio-channels-validation.md)
 - [Сравнение моделей Whisper](experiments/whisper-golos.md)

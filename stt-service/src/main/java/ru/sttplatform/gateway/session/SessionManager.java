@@ -13,6 +13,7 @@ import ru.sttplatform.diarization.session.DiarizationSession;
 import ru.sttplatform.diarization.session.SessionException;
 import ru.sttplatform.diarization.session.SessionRegistry;
 import ru.sttplatform.stt.whisper.WhisperClient;
+import ru.sttplatform.stt.transcript.TranscriptStore;
 import ru.sttplatform.stt.vosk.SpeechSessionFactory;
 import ru.sttplatform.stt.integration.IntegrationProperties;
 
@@ -50,12 +51,15 @@ public class SessionManager {
         volatile boolean finalizing, done;
         volatile String phase = "enrolling";
         volatile String failure;
+        volatile boolean transcriptReady;
+        volatile String transcriptError;
         Active(String id) { this(id, false); }
         Active(String id, boolean testMode) { this.id = id; this.testMode = testMode; }
     }
 
     private final SessionRegistry diarizationSessions;
     private final GatewayProperties props;
+    private final TranscriptStore transcriptStore;
     private final SpeechSessionFactory speechSessions;
     private final IntegrationProperties integrationProps;
     private volatile Active current;
@@ -73,6 +77,7 @@ public class SessionManager {
                           SpeechSessionFactory speechSessions, IntegrationProperties integrationProps) {
         this.diarizationSessions = diarizationSessions;
         this.props = props;
+        this.transcriptStore = new TranscriptStore(props);
         this.speechSessions = speechSessions;
         this.integrationProps = integrationProps;
         this.whisperClient = whisper;
@@ -351,7 +356,7 @@ public class SessionManager {
         a.phase = phase;
         Orchestrator orchestrator = a.orchestrator;
         if (orchestrator != null) {
-            result.put("integration", orchestrator.status());
+            result.put("integration", integrationStatus(a));
             if (TERMINAL.contains(phase) && !a.done) result.put("phase", "stopping");   // отчёт ещё готовится
             else if (a.done) {
                 Object bridgeError = orchestrator.status().get("bridge_error");
@@ -373,8 +378,28 @@ public class SessionManager {
         state.put("queue_depth_chunks", 0);
         state.put("role", "Кандидат · тестовый режим без диаризации");
         if (a.failure != null) state.put("error", a.failure);
-        if (a.orchestrator != null) state.put("integration", a.orchestrator.status());
+        if (a.orchestrator != null) state.put("integration", integrationStatus(a));
         return state;
+    }
+
+    /** Проверяет завершение текущей сессии перед выдачей опубликованных файлов.
+     * @param id идентификатор сессии
+     * @return разрешена ли проверка файлов в хранилище
+     */
+    public boolean transcriptAccessible(String id) {
+        Active a = current;
+        return a == null || !a.id.equals(id) || (a.done && a.transcriptReady);
+    }
+
+    private Map<String, Object> integrationStatus(Active a) {
+        Map<String, Object> status = new LinkedHashMap<>(a.orchestrator.status());
+        if (a.done && a.transcriptReady) {
+            String base = "/api/interviews/" + a.id + "/transcripts/";
+            status.put("transcripts", Json.map("plain", base + "transcript.md",
+                    "timed", base + "transcript-timed.md", "zip", base + "transcripts.zip"));
+        }
+        if (a.done && a.transcriptError != null) status.put("transcript_error", a.transcriptError);
+        return status;
     }
 
     private void onDiarizationEvent(Active a, JsonNode event) {
@@ -437,6 +462,7 @@ public class SessionManager {
             log.error("Завершение тестового интервью", error);
         } finally {
             a.orchestrator.close();
+            publishTranscript(a);
             a.done = true;
             a.finalizing = false;
         }
@@ -451,6 +477,7 @@ public class SessionManager {
                 if (TERMINAL.contains(String.valueOf(status.get("phase"))) || System.nanoTime() > deadline) break;
                 Thread.sleep(200);
             }
+            if (!"finished".equals(String.valueOf(status.get("phase")))) throw new IllegalStateException("Диаризация не завершилась успешно.");
             double audioSeconds = status.get("audio_seconds") instanceof Number n ? n.doubleValue() : 0;
             a.orchestrator.finish(audioSeconds, requireDiarization(a).segments());
         } catch (InterruptedException e) {
@@ -461,8 +488,23 @@ public class SessionManager {
             log.error("Завершение интервью", e);
         } finally {
             a.orchestrator.close();
+            publishTranscript(a);
             if (a.diarization != null) a.diarization.setListener(null);
             a.done = true;
+        }
+    }
+
+    private void publishTranscript(Active a) {
+        if (a.failure != null || !a.orchestrator.transcriptComplete()) {
+            a.transcriptError = "Транскрипция недоступна: обработка интервью завершилась с ошибкой.";
+            return;
+        }
+        try {
+            transcriptStore.publish(a.orchestrator.outputDirectory(), a.id, a.orchestrator.finalTranscriptWords());
+            a.transcriptReady = true;
+        } catch (Exception error) {
+            a.transcriptError = "Не удалось сохранить транскрипцию: " + error.getMessage();
+            log.error("Сохранение транскрипции", error);
         }
     }
 

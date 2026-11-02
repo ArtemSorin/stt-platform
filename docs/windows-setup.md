@@ -141,7 +141,10 @@ npx --yes @redocly/cli@1.34.2 lint .\docs\api\stt.openapi.yaml .\docs\api\analyt
 - `runs/integrated/<session>/stt-events.jsonl` — события Vosk;
 - `runs/integrated/<session>/timeline-events.jsonl` — изменения ролей, подсказки и метрики интеграции;
 - `runs/integrated/<session>/timeline.json` — плоский JSON таймлайн слов с источником, моделью, временем и статусом роли;
+- `runs/integrated/<session>/transcripts/transcript.md` и `transcript-timed.md` — реплики после завершения интервью; `transcripts.zip` содержит оба файла;
 - `runs/integrated/<session>/integration-summary.json` — очереди, задержки, ошибки и пути итоговых файлов;
 - `reports/*.xlsx` — отчёт аналитики с итогом по вопросам, критериями оценки и ответами.
 
 JSONL — по одному JSON-объекту на строку; `segments.json` и `timeline.json` — массивы JSON-объектов. Для пояснения полей см. [архитектуру](architecture.md) и [протокол событий](api/interview-events.md).
+
+На страницах основного и тестового интервью после завершения доступно чтение обоих вариантов и скачивание ZIP. Ссылка на сессию сохраняет доступ после перезапуска сервиса, пока каталог результатов существует. При ошибке обработки или записи результат может быть недоступен; проверьте сообщение на странице и журналы.

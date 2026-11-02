@@ -89,6 +89,7 @@ async function askQuestion(question) {
 }
 function render(state) {
   const phase = state.phase || 'idle', integration = state.integration || {};
+  window.transcriptView?.update(phase, integration.transcripts, integration.transcript_error, state.session_id);
   $('status').textContent = ({live:'Интервью идёт · без диаризации',stopping:'Формируется отчёт',finished:'Интервью завершено',error:'Ошибка обработки'})[phase] || phase;
   if (state.error || integration.bridge_error) showError(state.error || integration.bridge_error);
   $('partial').textContent = integration.mixed_partial || 'Ожидание речи';

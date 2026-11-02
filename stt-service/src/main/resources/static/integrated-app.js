@@ -145,6 +145,7 @@ function render(status) {
   if (integration.bridge_error) showError(integration.bridge_error);
   if (integration.microphone_warning) showError(integration.microphone_warning);
   if (integration.candidate_warning) showError(integration.candidate_warning);
+  window.transcriptView?.update(phase, integration.transcripts, integration.transcript_error, status.session_id);
   renderTranscript(integration);
   renderFinalReport(integration.report, integration.excel, phase);
 

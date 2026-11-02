@@ -136,6 +136,9 @@ public final class Orchestrator implements AutoCloseable {
     private final Thread sttWorker, microphoneWorker, candidateWorker;
     private final ByteArrayOutputStream candidateAnswerAudio = new ByteArrayOutputStream();
     private final Set<Integer> cancelledWhisperAnswers = ConcurrentHashMap.newKeySet();
+    private final Map<Integer, JsonNode> pendingWhisperWords = new ConcurrentHashMap<>();
+    private final Map<Integer, CompletableFuture<Void>> whisperCompletion = new ConcurrentHashMap<>();
+    private final Map<Integer, SampleRange> acceptedWhisperRanges = new HashMap<>();
     private volatile int lastWhisperAnswerId;
     private final Thread cpuSampler;
     private long capturedSamples, gatedSamples, lastCapturedNanos, lastCandidateEnd;
@@ -899,6 +902,7 @@ public final class Orchestrator implements AutoCloseable {
             }
         }
         if ("final".equals(type)) {
+            markWhisperReplacements();
             preliminaryWords.remove(source);
             utteranceNumbers.put(source, utterance + 1);
         } else preliminaryWords.put(source, words);
@@ -941,7 +945,7 @@ public final class Orchestrator implements AutoCloseable {
     private void reviseRoles() {
         boolean changed = false;
         for (Map<String, Object> word : currentWords()) {
-            if ("microphone".equals(word.get("source"))) continue;
+            if ("microphone".equals(word.get("source")) || "whisper".equals(word.get("model"))) continue;
             long start = Math.round(((Number) word.get("start")).doubleValue() * RATE);
             long end = Math.round(((Number) word.get("end")).doubleValue() * RATE);
             String updated = role(start, end);
@@ -954,6 +958,7 @@ public final class Orchestrator implements AutoCloseable {
             }
         }
         if (changed) {
+            markWhisperReplacements();
             writeTimeline();
             requestCandidatePeek();
         }
@@ -1053,7 +1058,17 @@ public final class Orchestrator implements AutoCloseable {
         }
         if ("retract".equals(type)) {
             decisionRetracted = true;
-            if (lastWhisperAnswerId > 0) cancelledWhisperAnswers.add(lastWhisperAnswerId);
+            if (lastWhisperAnswerId > 0) {
+                cancelledWhisperAnswers.add(lastWhisperAnswerId);
+                pendingWhisperWords.remove(lastWhisperAnswerId);
+                CompletableFuture<Void> cancelledFuture = whisperCompletion.get(lastWhisperAnswerId);
+                if (cancelledFuture != null) cancelledFuture.complete(null);
+                int cancelled = lastWhisperAnswerId;
+                acceptedWhisperRanges.remove(cancelled);
+                finalWords.removeIf(word -> "whisper".equals(word.get("model")) && Integer.valueOf(cancelled).equals(word.get("answer_id")));
+                markWhisperReplacements();
+                writeTimeline();
+            }
             decision = null;
             if (preview != null) {
                 preview = null;
@@ -1103,32 +1118,33 @@ public final class Orchestrator implements AutoCloseable {
             whisperState = "получен";
             Long decisionTime = decisionTimes.get(data.path("answerId").asInt());
             if (decisionTime != null) whisperLatencies.add((System.nanoTime() - decisionTime) / 1e6);
-            long base = answerBases.getOrDefault(data.path("answerId").asInt(), 0L)
-                    + Math.round(data.path("trimStartMs").asDouble() * RATE / 1000.0);
-            long maxEnd = base;
-            List<Map<String, Object>> refinedWords = new ArrayList<>();
-            for (JsonNode word : data.path("words")) {
-                long start = base + Math.round(word.path("start").asDouble() * RATE);
-                long end = base + Math.round(word.path("end").asDouble() * RATE);
-                maxEnd = Math.max(maxEnd, end);
-                refinedWords.add(Json.map("word", word.path("word").asText(""),
-                        "word_id", "whisper:" + data.path("answerId").asInt() + ":" + refinedWords.size(),
-                        "start", Json.round(start / (double) RATE, 3),
-                        "end", Json.round(end / (double) RATE, 3),
-                        "role", "Кандидат", "role_status", "confirmed", "source", "candidate_gated",
-                        "model", "whisper", "status", "final",
-                        "answer_id", data.path("answerId").asInt(),
-                        "confidence", word.hasNonNull("confidence") ? word.path("confidence").asDouble() : null));
-            }
-            if (!refinedWords.isEmpty()) {
-                for (Map<String, Object> word : finalWords) {
-                    if (!"vosk".equals(word.get("model")) || !"Кандидат".equals(word.get("role"))) continue;
-                    long position = Math.round(((Number) word.get("start")).doubleValue() * RATE);
-                    if (position >= base && position <= maxEnd) word.put("status", "replaced_by_whisper");
+            int answerId = data.path("answerId").asInt();
+            JsonNode words = pendingWhisperWords.remove(answerId);
+            if (words != null && !cancelledWhisperAnswers.contains(answerId)) {
+                long base = answerBases.getOrDefault(answerId, 0L);
+                long answerEnd = decisionAudioEnds.getOrDefault(answerId, base);
+                List<Map<String, Object>> refinedWords = new ArrayList<>();
+                for (JsonNode word : words) {
+                    long start = base + Math.round(word.path("start").asDouble() * RATE);
+                    long end = base + Math.round(word.path("end").asDouble() * RATE);
+                    if (word.path("word").asText("").isBlank()) continue;
+                    refinedWords.add(Json.map("word", word.path("word").asText(""),
+                            "word_id", "whisper:" + answerId + ":" + refinedWords.size(),
+                            "start", Json.round(start / (double) RATE, 3),
+                            "end", Json.round(end / (double) RATE, 3),
+                            "role", "Кандидат", "role_status", "confirmed", "source", "candidate_gated",
+                            "model", "whisper", "status", "final", "answer_id", answerId,
+                            "confidence", word.hasNonNull("confidence") ? word.path("confidence").asDouble() : null));
                 }
-                finalWords.addAll(refinedWords);
-                writeTimeline();
+                if (!refinedWords.isEmpty()) {
+                    acceptedWhisperRanges.put(answerId, new SampleRange(base, answerEnd));
+                    finalWords.addAll(refinedWords);
+                    markWhisperReplacements();
+                    writeTimeline();
+                }
             }
+            CompletableFuture<Void> completion = whisperCompletion.get(answerId);
+            if (completion != null) completion.complete(null);
         }
         if ("service_status".equals(type))
             whisperState = "configured".equals(data.path("whisper").asText()) ? "готов" : "выключен";
@@ -1171,7 +1187,10 @@ public final class Orchestrator implements AutoCloseable {
                     "error", "Ответ короче 0,5 секунды; Whisper пропущен."));
             return;
         }
+        CompletableFuture<Void> completion = new CompletableFuture<>();
+        whisperCompletion.put(answerId, completion);
         Thread thread = new Thread(() -> {
+            boolean sent = false;
             try {
                 WhisperClient.Reply reply = whisperClient.post("/transcribe-json", pcm);
                 if (cancelledWhisperAnswers.contains(answerId)) return;
@@ -1190,10 +1209,12 @@ public final class Orchestrator implements AutoCloseable {
                 if (cancelledWhisperAnswers.contains(answerId)) return;
                 List<Map<String, Object>> words = new ArrayList<>();
                 for (JsonNode word : result.path("words")) words.add(Json.toMap(word));
+                pendingWhisperWords.put(answerId, result.path("words").deepCopy());
                 sendAnalytics(Json.map("type", "refined", "answerId", answerId, "attemptId", attemptId, "text", text,
                         "words", words,
                         "audioStartSample", answerBases.getOrDefault(answerId, answerStartSample),
                         "audioEndSample", decisionAudioEnds.getOrDefault(answerId, capturedSamples)));
+                sent = true;
                 sendAnalytics(Json.map("type", "refine_done", "answerId", answerId, "attemptId", attemptId));
             } catch (Throwable error) {
                 if (!cancelledWhisperAnswers.contains(answerId)) {
@@ -1204,6 +1225,8 @@ public final class Orchestrator implements AutoCloseable {
                         failure = "Не удалось отправить результат Whisper: " + sendError;
                     }
                 }
+            } finally {
+                if (!sent || cancelledWhisperAnswers.contains(answerId)) completion.complete(null);
             }
         }, "whisper-answer-" + answerId);
         thread.setDaemon(true);
@@ -1303,8 +1326,16 @@ public final class Orchestrator implements AutoCloseable {
         }
         try {
             sendAnalytics(Json.map("type", "stop", "audioEndSample", capturedSamples));
-            if (failure == null && !reportReceived.await(30, TimeUnit.SECONDS))
-                failure = "Отчёт analytics-service не получен за 30 секунд.";
+            if (failure == null && !reportReceived.await(150, TimeUnit.SECONDS))
+                failure = "Отчёт analytics-service не получен за 150 секунд.";
+            if (failure == null) {
+                try {
+                    CompletableFuture.allOf(whisperCompletion.values().toArray(new CompletableFuture<?>[0]))
+                            .get(125, TimeUnit.SECONDS);
+                } catch (java.util.concurrent.TimeoutException timeout) {
+                    logQuietly(Json.map("type", "whisper_timeout", "message", "Whisper не подтвердил уточнение; сохраняем исходный Vosk."));
+                }
+            }
         }
         catch (InterruptedException error) { Thread.currentThread().interrupt(); failure = "Ожидание отчёта analytics-service прервано."; }
         catch (Throwable error) { failure = "Не удалось завершить сессию analytics-service: " + error; }
@@ -1324,6 +1355,18 @@ public final class Orchestrator implements AutoCloseable {
         if (!candidateQueue.offer(CANDIDATE_END, 5, TimeUnit.SECONDS)) {
             failure = "Не удалось закрыть очередь " + name + ": worker не освобождает место.";
             worker.interrupt();
+        }
+    }
+
+    private void markWhisperReplacements() {
+        for (Map<String, Object> word : finalWords) {
+            if (!"vosk".equals(word.get("model"))) continue;
+            if ("replaced_by_whisper".equals(word.get("status"))) word.put("status", "final");
+            if (!"Кандидат".equals(word.get("role"))) continue;
+            long start = Math.round(((Number) word.get("start")).doubleValue() * RATE);
+            long end = Math.round(((Number) word.get("end")).doubleValue() * RATE);
+            if (acceptedWhisperRanges.values().stream().anyMatch(range -> start < range.end() && end > range.start()))
+                word.put("status", "replaced_by_whisper");
         }
     }
 
@@ -1459,6 +1502,30 @@ public final class Orchestrator implements AutoCloseable {
     }
 
     private void logQuietly(Map<String, Object> data) { emit(data); }
+
+    /** Возвращает финальные слова после закрытия потоков.
+     * @return независимая копия таймлайна
+     */
+    public synchronized List<Map<String, Object>> finalTranscriptWords() {
+        List<Map<String, Object>> copy = new ArrayList<>();
+        for (Map<String, Object> word : finalWords) {
+            Map<String, Object> row = new LinkedHashMap<>(word);
+            if ("preliminary".equals(row.get("role_status"))) {
+                row.put("role", "Не определено");
+                row.put("role_status", "unknown");
+            }
+            copy.add(row);
+        }
+        return copy;
+    }
+
+    /** @return можно ли считать обработку STT завершённой */
+    public synchronized boolean transcriptComplete() {
+        return failure == null && microphoneWarning == null;
+    }
+
+    /** @return каталог результатов сессии */
+    public Path outputDirectory() { return directory; }
 
     @Override public synchronized void close() {
         if (closed) return;

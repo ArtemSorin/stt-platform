@@ -44,7 +44,20 @@
     <div class="card"><strong>Whisper</strong><div id="whisper-state">Не запущен</div></div>
     <div class="card"><strong>События</strong><div id="log"></div></div>
   </section>
+<section id="transcript-result" class="card" hidden aria-live="polite">
+  <div class="role-label">Полная транскрипция</div>
+  <p id="transcript-result-state"></p>
+  <div id="transcript-actions" hidden>
+    <button id="transcript-show-timed" type="button">С таймкодами</button>
+    <button id="transcript-show-plain" type="button">Без таймкодов</button>
+    <a id="transcript-zip">Скачать транскрипцию</a>
+    <a id="transcript-link">Ссылка на эту транскрипцию</a>
+    <pre id="transcript-full" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+  </div>
+</section>
+
   <section id="report" class="card hidden"></section>
+  <script src="/transcript-view.js"></script>
   <script src="/test-app.js"></script>
 </body>
 </html>
