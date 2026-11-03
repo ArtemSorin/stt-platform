@@ -142,6 +142,7 @@ npx --yes @redocly/cli@1.34.2 lint .\docs\api\stt.openapi.yaml .\docs\api\analyt
 - `runs/diarization/<session>/summary.json` — итоговая сводка диаризации;
 - `runs/integrated/<session>/stt-events.jsonl` — события Vosk;
 - `runs/integrated/<session>/timeline-events.jsonl` — изменения ролей, подсказки и метрики интеграции;
+- там же события `whisper_postprocess_chunk` показывают каждый фрагмент финального прохода и число распознанных слов; `whisper_postprocess_error` показывает сбой с сохранением ранее подтверждённых уточнений и Vosk;
 - `runs/integrated/<session>/timeline.json` — плоский JSON таймлайн слов с источником, моделью, временем и статусом роли;
 - `runs/integrated/<session>/transcripts/transcript.md` и `transcript-timed.md` — реплики после завершения интервью; `transcripts.zip` содержит оба файла;
 - `runs/integrated/<session>/integration-summary.json` — очереди, задержки, ошибки и пути итоговых файлов;
@@ -150,3 +151,5 @@ npx --yes @redocly/cli@1.34.2 lint .\docs\api\stt.openapi.yaml .\docs\api\analyt
 JSONL — по одному JSON-объекту на строку; `segments.json` и `timeline.json` — массивы JSON-объектов. Для пояснения полей см. [архитектуру](architecture.md) и [протокол событий](api/interview-events.md).
 
 На страницах основного и тестового интервью после завершения доступно чтение обоих вариантов и скачивание ZIP. Ссылка на сессию сохраняет доступ после перезапуска сервиса, пока каталог результатов существует. При ошибке обработки или записи результат может быть недоступен; проверьте сообщение на странице и журналы.
+
+Если Whisper включён, после остановки интервью идёт дополнительная обработка всех подтверждённых участков речи кандидата из исходного системного аудио. Это может занять время; до её завершения кнопка скачивания не появится. Временный `.whisper-source.pcm.tmp` в каталоге сессии удаляется при штатном завершении. В журнале можно сравнить число отправленных фрагментов и `words` для каждого; участок с нулём слов остаётся в Markdown по Vosk.

@@ -108,9 +108,20 @@ public class TranscriptStore {
             words.add(new Word(s.doubleValue(), e.doubleValue(), role, text, String.valueOf(row.get("source")), String.valueOf(row.get("word_id"))));
         }
         words.sort(Comparator.comparingDouble(Word::start).thenComparing(Word::source).thenComparing(Word::id));
-        List<Turn> turns = new ArrayList<>();
+        // Слова разных говорящих могут идти одновременно. Собираем каждую роль
+        // отдельно, иначе пересечение превращает длинный ответ в строки по слову.
+        Map<String, List<Turn>> byRole = new java.util.LinkedHashMap<>();
+        Map<String, Boolean> interrupted = new java.util.HashMap<>();
         for (Word word : words) {
-            if (turns.isEmpty() || !turns.get(turns.size()-1).role().equals(word.role()) || word.start() - turns.get(turns.size()-1).end() > 1.5) {
+            for (var entry : byRole.entrySet()) {
+                if (entry.getKey().equals(word.role())) continue;
+                List<Turn> earlier = entry.getValue();
+                if (word.start() >= earlier.get(earlier.size() - 1).end())
+                    interrupted.put(entry.getKey(), true);
+            }
+            List<Turn> turns = byRole.computeIfAbsent(word.role(), ignored -> new ArrayList<>());
+            if (turns.isEmpty() || Boolean.TRUE.equals(interrupted.remove(word.role()))
+                    || word.start() - turns.get(turns.size()-1).end() > 1.5) {
                 turns.add(new Turn(word.start(), word.end(), word.role(), word.text()));
             } else {
                 Turn last = turns.remove(turns.size()-1);
@@ -118,6 +129,9 @@ public class TranscriptStore {
                 turns.add(new Turn(last.start(), Math.max(last.end(), word.end()), last.role(), last.text() + separator + word.text()));
             }
         }
+        List<Turn> turns = new ArrayList<>();
+        byRole.values().forEach(turns::addAll);
+        turns.sort(Comparator.comparingDouble(Turn::start).thenComparingDouble(Turn::end).thenComparing(Turn::role));
         return turns;
     }
 

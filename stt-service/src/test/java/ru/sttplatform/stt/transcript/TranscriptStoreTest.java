@@ -85,4 +85,28 @@ class TranscriptStoreTest {
         store.publish(session, id, List.of());
         assertEquals("", Files.readString(store.find(id, "transcript.md")));
     }
+
+    @Test void overlappingSpeakersRemainReadableTurns() throws Exception {
+        var store = new TranscriptStore(new GatewayProperties(null, null, root.toString()));
+        String id = UUID.randomUUID().toString();
+        Path session = Files.createDirectory(root.resolve("overlap"));
+        store.publish(session, id, List.of(
+                word(1.0, 1.3, "Кандидат", "длинный", "final"),
+                word(1.1, 1.2, "Интервьюер 1", "ага", "final"),
+                word(1.3, 1.6, "Кандидат", "ответ", "final")));
+        assertEquals("Кандидат: длинный ответ\nИнтервьюер 1: ага\n",
+                Files.readString(store.find(id, "transcript.md")));
+    }
+
+    @Test void sequentialRoleChangeStillStartsNewTurnWithoutLongPause() throws Exception {
+        var store = new TranscriptStore(new GatewayProperties(null, null, root.toString()));
+        String id = UUID.randomUUID().toString();
+        Path session = Files.createDirectory(root.resolve("handoff"));
+        store.publish(session, id, List.of(
+                word(1.0, 1.2, "Кандидат", "первый", "final"),
+                word(1.3, 1.5, "Интервьюер 1", "вопрос", "final"),
+                word(1.6, 1.8, "Кандидат", "второй", "final")));
+        assertEquals("Кандидат: первый\nИнтервьюер 1: вопрос\nКандидат: второй\n",
+                Files.readString(store.find(id, "transcript.md")));
+    }
 }
