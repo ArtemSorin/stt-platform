@@ -51,6 +51,18 @@ class ChannelAudioTest {
     }
 
     @Test
+    void test_audio_can_be_recorded_without_feeding_answer_and_microphone_loss_is_reported() throws Exception {
+        SessionManager sessions = mock(SessionManager.class);
+        var controller = new BrowserApiController(sessions, new GatewayProperties(null, null, null));
+        MockHttpServletRequest audio = new MockHttpServletRequest();
+        audio.setContent(new byte[]{1, 2});
+        assertEquals(true, controller.audio(audio, "session", "3", false).get("ok"));
+        verify(sessions).liveAudio("session", 3, new byte[]{1, 2}, false);
+        assertEquals(true, controller.microphoneLost(new MockHttpServletRequest(), "session").get("ok"));
+        verify(sessions).microphoneLost("session");
+    }
+
+    @Test
     void channel_session_rejects_repeated_sequence_and_format_switch() throws Exception {
         var manager = new SessionManager(mock(SessionRegistry.class), new GatewayProperties(null, null, null),
                 mock(WhisperClient.class), mock(SpeechSessionFactory.class), mock(IntegrationProperties.class));

@@ -4,7 +4,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.test.util.ReflectionTestUtils;
 import ru.sttplatform.common.json.Json;
-import ru.sttplatform.stt.transcript.PostInterviewWhisper;
+import ru.sttplatform.stt.transcript.InterviewAudioSpool;
+import ru.sttplatform.stt.transcript.FinalTranscriptBuilder;
 import ru.sttplatform.stt.whisper.WhisperClient;
 
 import java.io.BufferedWriter;
@@ -57,6 +58,11 @@ class WhisperAcknowledgementTest {
                 Json.tree("{\"type\":\"retract\",\"sessionId\":\"session\",\"sequence\":2}"));
         assertEquals(2, rows.size());
         assertEquals("final", rows.get(0).get("status"));
+        assertNull(ReflectionTestUtils.getField(orchestrator, "refined"));
+        ReflectionTestUtils.invokeMethod(orchestrator, "onInterview",
+                Json.tree("{\"type\":\"refined\",\"sessionId\":\"session\",\"sequence\":3,\"answerId\":3,\"text\":\"запоздалый\"}"));
+        assertNull(ReflectionTestUtils.getField(orchestrator, "refined"));
+        assertEquals(2, rows.size());
     }
 
     @Test void incompleteWhisperDoesNotEraseEarlierVoskWords() throws Exception {
@@ -87,34 +93,30 @@ class WhisperAcknowledgementTest {
         assertEquals("replaced_by_whisper", rows.get(1).get("status"));
     }
 
-    @Test void postInterviewPassReplacesOldRefinementButKeepsUncoveredVosk() throws Exception {
+    @Test void finalPassUsesBothChannelsAndExcludesLiveAndVoskWords() throws Exception {
         Orchestrator orchestrator = mock(Orchestrator.class, CALLS_REAL_METHODS);
-        var rows = new ArrayList<Map<String, Object>>();
-        rows.add(new LinkedHashMap<>(Map.of("word", "начало", "start", 1.0, "end", 1.4,
-                "role", "Кандидат", "source", "system", "model", "vosk", "status", "replaced_by_whisper", "word_id", "a")));
-        rows.add(new LinkedHashMap<>(Map.of("word", "конец", "start", 4.0, "end", 4.5,
-                "role", "Кандидат", "source", "system", "model", "vosk", "status", "replaced_by_whisper", "word_id", "b")));
-        rows.add(new LinkedHashMap<>(Map.of("word", "старое", "start", 4.1, "end", 4.3,
-                "role", "Кандидат", "source", "candidate_gated", "model", "whisper", "status", "final", "word_id", "old")));
         WhisperClient client = mock(WhisperClient.class);
-        when(client.post(eq("/transcribe-json"), any(byte[].class))).thenReturn(new WhisperClient.Reply(200,
-                "{\"words\":[{\"word\":\"новое\",\"start\":0.1,\"end\":0.4}]}"));
-        try (PostInterviewWhisper source = new PostInterviewWhisper(directory)) {
-            source.append(0, new byte[5 * 16_000 * 2]);
-            set(orchestrator, "postInterviewWhisper", source);
+        when(client.post(eq("/transcribe-json"), any(byte[].class))).thenAnswer(call -> {
+            byte[] pcm = call.getArgument(1);
+            String text = pcm[0] == 1 ? "кандидат" : "интервьюер";
+            return new WhisperClient.Reply(200, "{\"words\":[{\"word\":\"" + text + "\",\"start\":0.1,\"end\":0.5}]}");
+        });
+        try (var source = new InterviewAudioSpool(directory, "session", true)) {
+            byte[] system = new byte[32_000], mic = new byte[32_000];
+            java.util.Arrays.fill(system, (byte) 1); java.util.Arrays.fill(mic, (byte) 2);
+            source.append(0, system, mic); source.seal(16_000);
+            set(orchestrator, "audioSpool", source);
             set(orchestrator, "whisperClient", client);
-            set(orchestrator, "directory", directory);
             set(orchestrator, "timelineLog", new BufferedWriter(new StringWriter()));
-            set(orchestrator, "finalWords", rows);
-            set(orchestrator, "preliminaryWords", new HashMap<>());
-            set(orchestrator, "acceptedWhisperRanges", new HashMap<>());
-            set(orchestrator, "spans", new ArrayList<>(List.of(
-                    new Orchestrator.VoiceSpan(4 * 16_000L, 5 * 16_000L, "Кандидат", "1", false))));
+            set(orchestrator, "finalWords", new ArrayList<>(List.of(new LinkedHashMap<>(Map.of(
+                    "word", "старое", "start", .1, "end", .5, "model", "vosk", "source", "system")))));
+            set(orchestrator, "finalDiarizationSpans", List.of(new FinalTranscriptBuilder.SpeakerSpan(0, 16_000, "Кандидат", "c")));
+            set(orchestrator, "spans", new ArrayList<>(List.of(new Orchestrator.VoiceSpan(0, 16_000, "Интервьюер 9", "c", true))));
             ReflectionTestUtils.invokeMethod(orchestrator, "postprocessWhisper");
-            assertEquals("final", rows.get(0).get("status"));
-            assertEquals("replaced_by_whisper", rows.get(1).get("status"));
-            assertEquals(3, rows.size());
-            assertEquals("новое", rows.get(2).get("word"));
+            var result = orchestrator.finalTranscriptWords();
+            assertEquals(List.of("кандидат", "интервьюер"), result.stream().map(row -> row.get("word")).toList());
+            assertEquals(List.of("Кандидат", "Интервьюер 1"), result.stream().map(row -> row.get("role")).toList());
+            assertTrue(orchestrator.transcriptComplete());
         }
     }
 

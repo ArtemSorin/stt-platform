@@ -141,15 +141,17 @@ public class BrowserApiController {
      * @param request запрос с телом PCM
      * @param token идентификатор сессии
      * @param sequence номер кадра
+     * @param candidateEnabled направлять ли звук тестового режима в анализ ответа
      * @return {@code {ok: true}}
      * @throws IOException при ошибке чтения тела
      */
     @PostMapping("/api/audio")
     public Map<String, Object> audio(HttpServletRequest request,
                                      @RequestHeader(value = "X-Session-Id", required = false) String token,
-                                     @RequestHeader(value = "X-Sequence", required = false) String sequence) throws IOException {
+                                     @RequestHeader(value = "X-Sequence", required = false) String sequence,
+                                     @RequestHeader(value = "X-Candidate-Enabled", defaultValue = "true") boolean candidateEnabled) throws IOException {
         checkOrigin(request);
-        sessions.liveAudio(token, number(sequence), readAudio(request));
+        sessions.liveAudio(token, number(sequence), readAudio(request), candidateEnabled);
         return Json.map("ok", true);
     }
 
@@ -169,6 +171,18 @@ public class BrowserApiController {
         if (bytes.length < 4 || bytes.length > MAX_CHANNEL_AUDIO_BYTES || bytes.length % 4 != 0)
             throw new ApiException(400, "Ожидаются два канала PCM16 16 кГц, до 0,64 с на источник.");
         sessions.liveAudioChannels(token, number(sequence), bytes);
+        return Json.map("ok", true);
+    }
+
+    /** Сообщает о потере микрофона при продолжающейся записи системного звука.
+     * @param request запрос браузера
+     * @param token идентификатор интервью
+     * @return подтверждение */
+    @PostMapping("/api/audio/microphone-lost")
+    public Map<String, Object> microphoneLost(HttpServletRequest request,
+            @RequestHeader(value = "X-Session-Id", required = false) String token) {
+        checkOrigin(request);
+        sessions.microphoneLost(token);
         return Json.map("ok", true);
     }
 

@@ -109,4 +109,19 @@ class TranscriptStoreTest {
         assertEquals("Кандидат: первый\nИнтервьюер 1: вопрос\nКандидат: второй\n",
                 Files.readString(store.find(id, "transcript.md")));
     }
+
+    @Test void interleavedWordsFromOverlappingTurnsStayInTwoLines() throws Exception {
+        var store = new TranscriptStore(new GatewayProperties(null, null, root.toString()));
+        String id = UUID.randomUUID().toString();
+        Path session = Files.createDirectory(root.resolve("interleaved"));
+        store.publish(session, id, List.of(
+                word(1.0, 1.1, "Кандидат", "первое", "final"),
+                word(1.05, 1.15, "Интервьюер 1", "раз", "final"),
+                word(1.2, 1.3, "Кандидат", "второе", "final"),
+                word(1.35, 1.4, "Интервьюер 1", "два", "final"),
+                word(1.45, 1.55, "Кандидат", "третье", "final"),
+                word(1.6, 1.7, "Интервьюер 1", "три", "final")));
+        assertEquals("Кандидат: первое второе третье\nИнтервьюер 1: раз два три\n",
+                Files.readString(store.find(id, "transcript.md")));
+    }
 }

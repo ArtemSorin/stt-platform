@@ -28,8 +28,11 @@ public class TranscriptStore {
         root = Path.of(props.outputDir()).toAbsolutePath().normalize();
     }
 
-    private record Word(double start, double end, String role, String text, String source, String id) {}
+    private record Word(double start, double end, String role, String text, String source, String speaker, String id) {
+        String key() { return source + "\u0000" + speaker + "\u0000" + role; }
+    }
     private record Turn(double start, double end, String role, String text) {}
+    private record TurnSpan(double start, double end, String key) {}
 
     /** Публикует оба варианта и архив; маркер готовности записывается последним.
      * @param directory каталог сессии
@@ -105,32 +108,55 @@ public class TranscriptStore {
                 throw new IOException("Неверное время слова в таймлайне");
             String role = String.valueOf(row.getOrDefault("role", "Не определено"));
             if (role.isBlank() || "null".equals(role)) role = "Не определено";
-            words.add(new Word(s.doubleValue(), e.doubleValue(), role, text, String.valueOf(row.get("source")), String.valueOf(row.get("word_id"))));
+            words.add(new Word(s.doubleValue(), e.doubleValue(), role, text, String.valueOf(row.get("source")),
+                    String.valueOf(row.getOrDefault("speaker_id", role)), String.valueOf(row.get("word_id"))));
         }
         words.sort(Comparator.comparingDouble(Word::start).thenComparing(Word::source).thenComparing(Word::id));
-        // Слова разных говорящих могут идти одновременно. Собираем каждую роль
-        // отдельно, иначе пересечение превращает длинный ответ в строки по слову.
-        Map<String, List<Turn>> byRole = new java.util.LinkedHashMap<>();
-        Map<String, Boolean> interrupted = new java.util.HashMap<>();
-        for (Word word : words) {
-            for (var entry : byRole.entrySet()) {
-                if (entry.getKey().equals(word.role())) continue;
-                List<Turn> earlier = entry.getValue();
-                if (word.start() >= earlier.get(earlier.size() - 1).end())
-                    interrupted.put(entry.getKey(), true);
+        // Сначала собираем слова каждого канала и голоса: совпадение времени не разрывает чужую реплику.
+        Map<String, List<Word>> groups = new java.util.LinkedHashMap<>();
+        for (Word word : words) groups.computeIfAbsent(word.key(), ignored -> new ArrayList<>()).add(word);
+        List<TurnSpan> spans = new ArrayList<>();
+        for (var entry : groups.entrySet()) {
+            double start = -1, end = -1;
+            for (Word word : entry.getValue()) {
+                if (start < 0 || word.start() - end > 1.5) {
+                    if (start >= 0) spans.add(new TurnSpan(start, end, entry.getKey()));
+                    start = word.start(); end = word.end();
+                } else end = Math.max(end, word.end());
             }
-            List<Turn> turns = byRole.computeIfAbsent(word.role(), ignored -> new ArrayList<>());
-            if (turns.isEmpty() || Boolean.TRUE.equals(interrupted.remove(word.role()))
-                    || word.start() - turns.get(turns.size()-1).end() > 1.5) {
-                turns.add(new Turn(word.start(), word.end(), word.role(), word.text()));
-            } else {
-                Turn last = turns.remove(turns.size()-1);
-                String separator = word.text().matches("^[.,!?;:%)»].*") ? "" : " ";
-                turns.add(new Turn(last.start(), Math.max(last.end(), word.end()), last.role(), last.text() + separator + word.text()));
-            }
+            if (start >= 0) spans.add(new TurnSpan(start, end, entry.getKey()));
         }
+        spans.sort(Comparator.comparingDouble(TurnSpan::start));
         List<Turn> turns = new ArrayList<>();
-        byRole.values().forEach(turns::addAll);
+        for (List<Word> group : groups.values()) {
+            StringBuilder text = new StringBuilder();
+            double start = -1, end = -1;
+            String role = null;
+            for (Word word : group) {
+                boolean interrupted = false;
+                if (start >= 0 && word.start() >= end) {
+                    int low = 0, high = spans.size();
+                    while (low < high) {
+                        int mid = (low + high) >>> 1;
+                        if (spans.get(mid).start() < end) low = mid + 1; else high = mid;
+                    }
+                    for (int i = low; i < spans.size() && spans.get(i).start() <= word.start(); i++) {
+                        TurnSpan other = spans.get(i);
+                        if (!other.key().equals(word.key()) && other.end() <= word.start()) { interrupted = true; break; }
+                    }
+                }
+                if (start < 0 || interrupted || word.start() - end > 1.5) {
+                    if (start >= 0) turns.add(new Turn(start, end, role, text.toString()));
+                    start = word.start(); end = word.end(); role = word.role();
+                    text.setLength(0); text.append(word.text());
+                } else {
+                    String separator = word.text().matches("^[.,!?;:%)»].*") ? "" : " ";
+                    end = Math.max(end, word.end());
+                    text.append(separator).append(word.text());
+                }
+            }
+            if (start >= 0) turns.add(new Turn(start, end, role, text.toString()));
+        }
         turns.sort(Comparator.comparingDouble(Turn::start).thenComparingDouble(Turn::end).thenComparing(Turn::role));
         return turns;
     }

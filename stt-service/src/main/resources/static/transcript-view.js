@@ -8,16 +8,19 @@
       const response = await fetch(urls[kind]);
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const value = await response.text();
-      if (number === requestNumber) el('transcript-full').textContent = value || 'Речь не распознана.';
+      if (number === requestNumber) {
+        el('transcript-full').textContent = value || 'Речь не распознана.';
+        actions.hidden = false; el('transcript-result-state').textContent = 'Транскрипция готова.';
+      }
     } catch (error) {
-      if (number === requestNumber) { actions.hidden = true; el('transcript-result-state').textContent = 'Не удалось прочитать транскрипцию: ' + error.message; }
+      if (number === requestNumber) { loadedKey = ''; actions.hidden = true; el('transcript-result-state').textContent = 'Не удалось прочитать транскрипцию: ' + error.message; }
     }
   }
   function ready(id, value) {
     const key = id + ':' + value.zip;
     if (key === loadedKey) return;
-    loadedKey = key; urls = value; panel.hidden = false; actions.hidden = false;
-    el('transcript-result-state').textContent = 'Транскрипция готова.';
+    loadedKey = key; urls = value; panel.hidden = false; actions.hidden = true;
+    el('transcript-result-state').textContent = 'Загружаем транскрипцию.';
     el('transcript-zip').href = value.zip;
     el('transcript-link').href = location.pathname + '?session=' + encodeURIComponent(id);
     show('timed');
@@ -25,9 +28,15 @@
   el('transcript-show-timed').onclick = () => show('timed');
   el('transcript-show-plain').onclick = () => show('plain');
   window.transcriptView = {
-    update(phase, value, error, id) {
+    update(phase, value, error, id, progress) {
       if (value && id) ready(id, value);
       else if (error) { panel.hidden = false; actions.hidden = true; el('transcript-result-state').textContent = error; }
+      else if (phase === 'stopping') {
+        panel.hidden = false; actions.hidden = true;
+        el('transcript-result-state').textContent = progress
+          ? `Whisper обрабатывает запись: ${progress.done} из ${progress.total} фрагментов.`
+          : 'Готовим полную транскрипцию после интервью.';
+      }
       else if (phase === 'live' || phase === 'enrolling' || phase === 'preparing') {
         ++requestNumber; loadedKey = ''; panel.hidden = true; actions.hidden = true;
       }

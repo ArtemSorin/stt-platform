@@ -1,4 +1,5 @@
 @startuml stt-platform-c4
+!pragma layout smetana
 !include <C4/C4_Container>
 
 title stt-platform — C4 Container
@@ -12,16 +13,18 @@ Container_Ext(browser, "Браузер", "HTML / JavaScript", "Захват эт
 System_Boundary(platform, "stt-platform · локальная машина") {
     Container(stt, "STT + диаризация", "Spring Boot 3.3.5 · Java 17 · :8080", "Vosk и Nemotron/CAM++; браузерное API. В основном режиме обязательны эталон и диаризация.")
     Container(analytics, "Аналитика", "Spring Boot 3.3.5 · Java 17 · :8083", "Вопросы, решения, оценка FRIDA и XLSX-отчёты.")
-    Container(whisper, "Whisper helper · optional", "Python · :9000", "Локальное уточнение текста faster-whisper small.")
+    Container(whisper, "Whisper helper · optional", "Python · :9000", "Уточнение ответов и итоговая транскрипция faster-whisper small.")
     Container(frida, "FRIDA helper · optional", "Python · :9100", "Семантическая оценка; локальная модель не проверялась.")
     ContainerDb(models, "Артефакты моделей", "Файлы вне Git", "Vosk, Nemotron, CAM++, Whisper и FRIDA (если установлена).")
     ContainerDb(reports, "XLSX-отчёты", "Локальные файлы", "Создаются аналитикой; STT проксирует скачивание в браузер.")
+    ContainerDb(transcripts, "Транскрипции", "Временный PCM и локальные MD/ZIP", "STT сохраняет два канала; после интервью публикует текст по ролям.")
 }
 
 Rel_R(candidate, browser, "интервью")
-Rel_R(browser, stt, "HTTP API · PCM16 mono 16 кГц")
+Rel_R(browser, stt, "HTTP API · PCM16 16 кГц, два канала")
 Rel_R(stt, analytics, "внутренний /ws/interview-events · JSON в обе стороны")
-Rel_D(stt, whisper, "HTTP · PCM буфера ответа")
+Rel_D(stt, whisper, "HTTP · части ответа и итоговые части обоих каналов")
+Rel_D(stt, transcripts, "временная запись, затем MD и ZIP")
 Rel_D(analytics, frida, "HTTP · JSON оценки")
 Rel_D(analytics, reports, "сохраняет отчёт")
 Rel_D(stt, models, "Vosk / Nemotron / CAM++")
@@ -40,7 +43,7 @@ end note
 
 note bottom of platform
   common — Java/Maven-библиотека 1.0.0, включается в сервисы при сборке и отдельно не запускается.
-  /test.html явно считает все кадры речью кандидата и пропускает запись эталона и диаризацию.
+  /test.html считает микрофон речью кандидата и пропускает эталон и диаризацию.
 end note
 
 @enduml

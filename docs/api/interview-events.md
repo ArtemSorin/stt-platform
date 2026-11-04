@@ -56,7 +56,7 @@ Handshake требует заголовок `X-Internal-Token`. В обоих п
 | `question` | данные вопроса и перехода | Вопрос, который нужно показать или озвучить. |
 | `partial` | `text` | Текущая гипотеза ответа. |
 | `preview` / `preview_retract` | текст и оценка подсказки / причина отмены | Предварительная подсказка без фиксации решения. |
-| `decision` | `answerId`, `action`, `reason`, `recognized`, оценка и тайминги | Принятое решение. STT использует `answerId` для запроса Whisper. |
+| `decision` | `answerId`, `action`, `reason`, `recognized`, оценка и тайминги | Принятое решение. STT связывает уже отправленные части Whisper с `answerId`. |
 | `retract` | `reason`, при наличии восстановленный `question` | Отменить решение, если кандидат продолжил говорить в окне отмены. |
 | `finalizing` | сообщение | Аналитика формирует отчёт или ждёт уточнение. |
 | `refined`, `whisper_error`, `judge_error` | `answerId`, текст или сообщение | Результат повторного распознавания или диагностика. |
@@ -81,11 +81,15 @@ sequenceDiagram
         S->>V: общий звук и подтверждённые кадры кандидата
         S->>A: frame (текст, VAD, позиции, sequence)
         A-->>S: partial / preview
+        opt Накоплено 30 секунд и Whisper включён
+            S->>W: PCM очередной части ответа
+            W-->>S: слова части
+        end
     end
     A-->>S: decision (answerId)
     opt Whisper включён
-        S->>W: PCM буфера кандидата
-        W-->>S: текст и слова
+        S->>W: оставшаяся часть ответа
+        W-->>S: слова последней части
         S->>A: refined / refine_done (answerId)
     end
     A-->>S: question или report

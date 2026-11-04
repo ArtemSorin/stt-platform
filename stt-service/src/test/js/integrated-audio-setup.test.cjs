@@ -156,7 +156,8 @@ test('потеря системного звука завершает интер
   mic.sandbox.setModeForTest('live');
   mic.mic.onended();
   assert.match(mic.element('error').textContent, /Речь кандидата продолжает/);
-  assert.equal(mic.calls.requests.length, 0);
+  assert.equal(mic.calls.requests.length, 1);
+  assert.equal(mic.calls.requests[0].url, '/api/audio/microphone-lost');
   assert.equal(mic.calls.stopped.length, 0);
 
   const system = harness();

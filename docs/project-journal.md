@@ -7,6 +7,7 @@
 - [Проверка раздельных каналов](audio-channels-validation.md)
 - [Сравнение моделей Whisper](experiments/whisper-golos.md)
 - [Пропуски в транскрипции и полный проход Whisper после интервью — 3 ноября 2026](experiments/whisper-full-pass-2026-11-03.md)
+- [Итоговая транскрипция двух каналов — 4 ноября 2026](experiments/two-channel-transcript-2026-11-04.md)
 - [Интеграционный тест распознавания и аналитики](experiments/integration-test.md)
 
 ## Аналитика и отчёт

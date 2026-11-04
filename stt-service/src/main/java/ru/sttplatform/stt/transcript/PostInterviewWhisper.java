@@ -5,131 +5,137 @@ import ru.sttplatform.common.json.Json;
 import ru.sttplatform.stt.whisper.WhisperClient;
 
 import java.io.IOException;
-import java.io.RandomAccessFile;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.function.BiConsumer;
 
-/** Повторно распознаёт каждый подтверждённый участок речи после остановки захвата. */
-public final class PostInterviewWhisper implements AutoCloseable {
+/** Распознаёт каждый канал завершённой записи небольшими перекрывающимися фрагментами. */
+public final class PostInterviewWhisper {
     private static final int RATE = 16_000;
-    private static final long CHUNK = 12L * RATE;
+    private static final long CORE = 11L * RATE;
     private static final long CONTEXT = RATE / 2L;
-    private final Path path;
-    private final RandomAccessFile audio;
-    private boolean sealed;
+    private final InterviewAudioSpool audio;
 
-    /** @param directory каталог сессии для временного исходного PCM
-     * @throws IOException если запись звука открыть не удалось
-     */
-    public PostInterviewWhisper(Path directory) throws IOException {
-        path = directory.resolve(".whisper-source.pcm.tmp");
-        audio = new RandomAccessFile(path.toFile(), "rw");
-        audio.setLength(0);
-    }
+    /** @param audio закрытая запись интервью */
+    public PostInterviewWhisper(InterviewAudioSpool audio) { this.audio = audio; }
 
-    /** Сохраняет исходный системный канал, включая звук с ещё неопределённой ролью.
-     * @param firstSample позиция блока на шкале интервью
-     * @param pcm моно PCM16, 16 кГц
-     * @throws IOException при ошибке записи или разрыве шкалы
+    /** Распознаёт оба канала целиком, включая интервалы без определённой роли.
+     * @param evidence признаки речи из Vosk и диаризации
+     * @param client локальный Whisper
+     * @param progress уведомление о числе обработанных и всех частей
+     * @return слова и сведения об обработанных частях
+     * @throws IOException если запись или ответ Whisper неполны
+     * @throws InterruptedException если запрос прерван
      */
-    public void append(long firstSample, byte[] pcm) throws IOException {
-        if (sealed || audio.length() != firstSample * 2L) throw new IOException("Разрыв записи для Whisper");
-        audio.write(pcm);
-    }
-
-    /** Обрабатывает всю речь кандидата короткими фрагментами после завершения интервью.
-     * @param ranges финальные интервалы речи кандидата в сэмплах
-     * @param client локальный Whisper helper
-     * @return слова с абсолютными временами и диагностика каждого отправленного фрагмента
-     * @throws IOException если исходный звук повреждён или helper ответил ошибкой
-     * @throws InterruptedException если обработка прервана
-     */
-    public Result transcribe(List<Range> ranges, WhisperClient client) throws IOException, InterruptedException {
-        sealed = true;
-        long total = audio.length() / 2L;
-        List<Word> result = new ArrayList<>();
+    public Result transcribe(List<SpeechEvidence> evidence, WhisperClient client,
+                             BiConsumer<Integer, Integer> progress) throws IOException, InterruptedException {
+        long total = audio.samples();
+        long perChannel = (total + CORE - 1) / CORE;
+        int count = Math.toIntExact(perChannel * audio.channels());
+        int completed = 0;
+        progress.accept(0, count);
+        List<Word> words = new ArrayList<>();
         List<Chunk> chunks = new ArrayList<>();
-        int chunkId = 0;
-        for (Range range : merge(ranges, total)) {
-            for (long coreStart = range.start(); coreStart < range.end(); coreStart += CHUNK) {
-                long coreEnd = Math.min(coreStart + CHUNK, range.end());
-                long readStart = Math.max(range.start(), coreStart - CONTEXT);
-                long readEnd = Math.min(range.end(), coreEnd + CONTEXT);
-                byte[] pcm = new byte[Math.toIntExact((readEnd - readStart) * 2L)];
-                audio.seek(readStart * 2L);
-                audio.readFully(pcm);
-                WhisperClient.Reply reply;
-                try { reply = client.post("/transcribe-json", pcm); }
-                catch (IOException error) { throw new IOException("Whisper, фрагмент " + chunkId
-                        + " [" + coreStart / (double) RATE + "–" + coreEnd / (double) RATE + " с]: "
-                        + error.getMessage(), error); }
-                if (reply.status() != 200) throw new IOException("Whisper ответил HTTP " + reply.status()
-                        + " на фрагмент " + chunkId);
-                JsonNode words = Json.tree(reply.body()).path("words");
-                if (!words.isArray()) throw new IOException("Whisper не вернул массив слов");
-                int before = result.size();
-                for (JsonNode word : words) {
-                    String text = word.path("word").asText("").trim();
-                    double start = readStart + word.path("start").asDouble(-1) * RATE;
-                    double end = readStart + word.path("end").asDouble(-1) * RATE;
-                    double middle = (start + end) / 2;
-                    if (text.isBlank() || start < readStart - 1 || end > readEnd + 1 || end < start
-                            || middle < coreStart || middle >= coreEnd) continue;
-                    result.add(new Word(text, Math.round(start), Math.round(end), chunkId,
-                            word.hasNonNull("confidence") ? word.path("confidence").asDouble() : null));
+        for (int channel = 0; channel < audio.channels(); channel++) {
+            for (long coreStart = 0; coreStart < total; coreStart += CORE) {
+                long coreEnd = Math.min(coreStart + CORE, total);
+                long readStart = Math.max(0, coreStart - CONTEXT);
+                long readEnd = Math.min(total, coreEnd + CONTEXT);
+                byte[] pcm = audio.read(channel, readStart, readEnd);
+                boolean expectedSpeech = false;
+                for (SpeechEvidence span : evidence) {
+                    if (span.channel() == channel && Math.min(coreEnd, span.end()) - Math.max(coreStart, span.start()) >= span.minimumOverlap()) {
+                        expectedSpeech = true;
+                        break;
+                    }
                 }
-                chunks.add(new Chunk(chunkId, coreStart, coreEnd, result.size() - before));
-                chunkId++;
+                List<Word> found = null;
+                IOException last = null;
+                for (int attempt = 0; attempt < 2; attempt++) {
+                    try {
+                        WhisperClient.Reply reply = client.post("/transcribe-json", pcm);
+                        if (reply.status() != 200) throw new IOException("Whisper ответил HTTP " + reply.status());
+                        found = parse(reply.body(), channel, completed, readStart, readEnd, coreStart, coreEnd);
+                        if (found.isEmpty() && expectedSpeech) throw new IOException("Whisper не распознал участок с признаками речи");
+                        last = null;
+                        break;
+                    } catch (IOException | IllegalArgumentException error) {
+                        last = new IOException("Канал " + channel + ", фрагмент " + completed + " ["
+                                + coreStart / (double) RATE + "–" + coreEnd / (double) RATE + " с]: " + error.getMessage(), error);
+                    }
+                }
+                if (last != null) throw last;
+                for (Word word : found) {
+                    int previous = words.size() - 1;
+                    if (previous >= 0 && duplicate(words.get(previous), word)) {
+                        Word old = words.get(previous);
+                        if (word.confidence() != null && (old.confidence() == null || word.confidence() > old.confidence()))
+                            words.set(previous, word);
+                    } else words.add(word);
+                }
+                chunks.add(new Chunk(channel, coreStart, coreEnd, found.size()));
+                progress.accept(++completed, count);
             }
         }
-        return new Result(List.copyOf(result), List.copyOf(chunks));
+        return new Result(List.copyOf(words), List.copyOf(chunks));
     }
 
-    /** @param start первый сэмпл включительно
-     * @param end последний сэмпл исключительно
-     */
-    public record Range(long start, long end) {}
-
-    /** @param text распознанное слово
-     * @param start абсолютный первый сэмпл
-     * @param end абсолютный последний сэмпл
-     * @param chunk номер обработанного фрагмента
-     * @param confidence оценка Whisper
-     */
-    public record Word(String text, long start, long end, int chunk, Double confidence) {}
-
-    /** @param id номер фрагмента
-     * @param start начало покрываемого интервала
-     * @param end конец покрываемого интервала
-     * @param words количество слов в результате
-     */
-    public record Chunk(int id, long start, long end, int words) {}
-
-    /** @param words распознанные слова
-     * @param chunks все отправленные фрагменты, в том числе без распознанных слов
-     */
-    public record Result(List<Word> words, List<Chunk> chunks) {}
-
-    private static List<Range> merge(List<Range> ranges, long total) {
-        List<Range> sorted = ranges.stream()
-                .map(r -> new Range(Math.max(0, r.start()), Math.min(total, r.end())))
-                .filter(r -> r.end() > r.start())
-                .sorted(Comparator.comparingLong(Range::start)).toList();
-        List<Range> merged = new ArrayList<>();
-        for (Range range : sorted) {
-            int last = merged.size() - 1;
-            if (last >= 0 && range.start() <= merged.get(last).end()) {
-                Range previous = merged.get(last);
-                merged.set(last, new Range(previous.start(), Math.max(previous.end(), range.end())));
-            } else merged.add(range);
+    private static List<Word> parse(String body, int channel, int chunk, long readStart, long readEnd,
+                                    long coreStart, long coreEnd) throws IOException {
+        JsonNode root = Json.tree(body);
+        if (root == null) throw new IOException("Пустой ответ Whisper");
+        JsonNode array = root.path("words");
+        if (!array.isArray()) throw new IOException("Whisper не вернул массив слов");
+        List<Word> result = new ArrayList<>();
+        for (JsonNode word : array) {
+            String text = word.path("word").asText("").trim();
+            if (text.isBlank() || !word.path("start").isNumber() || !word.path("end").isNumber())
+                throw new IOException("Некорректное слово Whisper");
+            double start = readStart + word.path("start").asDouble() * RATE;
+            double end = readStart + word.path("end").asDouble() * RATE;
+            if (!Double.isFinite(start) || !Double.isFinite(end) || start < readStart - 1 || end > readEnd + 1 || end < start)
+                throw new IOException("Некорректное время слова Whisper");
+            double middle = (start + end) / 2;
+            if (middle >= coreStart && middle < coreEnd)
+                result.add(new Word(channel, text, Math.round(start), Math.round(end), chunk,
+                        word.hasNonNull("confidence") ? word.path("confidence").asDouble() : null));
         }
-        return merged;
+        result.sort(Comparator.comparingLong(Word::start).thenComparingLong(Word::end));
+        return result;
     }
 
-    @Override public void close() throws IOException {
-        try { audio.close(); } finally { Files.deleteIfExists(path); }
+    private static boolean duplicate(Word a, Word b) {
+        if (a.channel() != b.channel() || a.chunk() == b.chunk()
+                || !a.text().equalsIgnoreCase(b.text())) return false;
+        long overlap = Math.min(a.end(), b.end()) - Math.max(a.start(), b.start());
+        return overlap > 0 && overlap * 2 >= Math.min(a.end() - a.start(), b.end() - b.start());
     }
+
+    /** @param channel номер канала
+     * @param start начало признака речи в сэмплах
+     * @param end конец признака речи в сэмплах
+     * @param minimumOverlap минимальное пересечение с основной частью */
+    public record SpeechEvidence(int channel, long start, long end, long minimumOverlap) {
+        /** Использует порог для протяжённого интервала диаризации.
+         * @param channel номер канала
+         * @param start начало интервала
+         * @param end конец интервала */
+        public SpeechEvidence(int channel, long start, long end) { this(channel, start, end, RATE / 5L); }
+    }
+    /** @param channel номер канала
+     * @param text слово
+     * @param start абсолютное начало в сэмплах
+     * @param end абсолютный конец в сэмплах
+     * @param chunk номер части
+     * @param confidence оценка Whisper */
+    public record Word(int channel, String text, long start, long end, int chunk, Double confidence) {}
+    /** @param channel номер канала
+     * @param start начало основной части
+     * @param end конец основной части
+     * @param words количество слов */
+    public record Chunk(int channel, long start, long end, int words) {}
+    /** @param words итоговые слова
+     * @param chunks обработанные части */
+    public record Result(List<Word> words, List<Chunk> chunks) {}
 }
