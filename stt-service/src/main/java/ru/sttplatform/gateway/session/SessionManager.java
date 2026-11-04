@@ -519,7 +519,7 @@ public class SessionManager {
         try {
             transcriptStore.publish(a.orchestrator.outputDirectory(), a.id, a.orchestrator.finalTranscriptWords());
             a.transcriptReady = true;
-            try { a.orchestrator.deleteAudioSpool(); }
+            try { if (!a.orchestrator.transcriptFallback()) a.orchestrator.deleteAudioSpool(); }
             catch (Exception error) { log.warn("Не удалось удалить временную аудиозапись: {}", error.toString()); }
         } catch (Exception error) {
             a.transcriptError = "Не удалось сохранить транскрипцию: " + error.getMessage();

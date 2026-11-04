@@ -25,7 +25,7 @@ class PostInterviewWhisperTest {
         List<Integer> seen = new ArrayList<>();
         when(client.post(eq("/transcribe-json"), any(byte[].class))).thenAnswer(call -> {
             byte[] pcm = call.getArgument(1);
-            assertTrue(pcm.length <= 12 * 16_000 * 2);
+            assertEquals(25 * 16_000 * 2, pcm.length);
             seen.add((int) pcm[0]);
             return new WhisperClient.Reply(200, "{\"words\":[{\"word\":\"слово\",\"start\":1,\"end\":1.2}]}");
         });
@@ -44,11 +44,11 @@ class PostInterviewWhisperTest {
             assertEquals(2, source.read(1, 0, 1)[0]);
             List<Integer> progress = new ArrayList<>();
             var result = new PostInterviewWhisper(source).transcribe(List.of(), client, (done, total) -> {
-                assertEquals(6, total); progress.add(done);
+                assertEquals(2, total); progress.add(done);
             });
-            assertEquals(List.of(1, 1, 1, 2, 2, 2), seen);
-            assertEquals(List.of(0, 1, 2, 3, 4, 5, 6), progress);
-            assertEquals(List.of(16_000L, 184_000L, 360_000L, 16_000L, 184_000L, 360_000L),
+            assertEquals(List.of(1, 2), seen);
+            assertEquals(List.of(0, 1, 2), progress);
+            assertEquals(List.of(16_000L, 16_000L),
                     result.words().stream().map(PostInterviewWhisper.Word::start).toList());
             source.delete();
         }
@@ -62,15 +62,13 @@ class PostInterviewWhisperTest {
             source.append(0, new byte[32_000], null); source.seal(16_000);
             var pass = new PostInterviewWhisper(source);
             assertTrue(pass.transcribe(List.of(), client, (a, b) -> {}).words().isEmpty());
-            assertThrows(IOException.class, () -> pass.transcribe(
-                    List.of(new PostInterviewWhisper.SpeechEvidence(0, 0, 16_000)), client, (a, b) -> {}));
-            assertThrows(IOException.class, () -> pass.transcribe(
-                    List.of(new PostInterviewWhisper.SpeechEvidence(0, 4_000, 5_600, 800)), client, (a, b) -> {}));
+            assertEquals(1, pass.transcribe(List.of(new PostInterviewWhisper.SpeechEvidence(0, 0, 16_000)), client, (a, b) -> {}).gaps().size());
+            assertEquals(1, pass.transcribe(List.of(new PostInterviewWhisper.SpeechEvidence(0, 4_000, 5_600, 800)), client, (a, b) -> {}).gaps().size());
             verify(client, times(5)).post(anyString(), any(byte[].class));
         }
     }
 
-    @Test void retriesInvalidResponsesAndDoesNotDuplicateBoundaryWord() throws Exception {
+    @Test void retriesInvalidResponsesBeforeReturningWholeChannel() throws Exception {
         WhisperClient client = mock(WhisperClient.class);
         AtomicInteger calls = new AtomicInteger();
         when(client.post(anyString(), any(byte[].class))).thenAnswer(call -> switch (calls.getAndIncrement()) {
@@ -81,8 +79,44 @@ class PostInterviewWhisperTest {
         try (InterviewAudioSpool source = new InterviewAudioSpool(directory, "session", false)) {
             source.append(0, new byte[24 * 32_000], null); source.seal(24 * 16_000L);
             var result = new PostInterviewWhisper(source).transcribe(List.of(), client, (a, b) -> {});
-            assertEquals(2, result.words().size()); // один раз на первой границе и ещё слово в последней части
-            assertEquals(0.9, result.words().get(0).confidence());
+            assertEquals(1, result.words().size());
+            assertEquals(0.8, result.words().get(0).confidence());
+            assertEquals(2, calls.get());
+        }
+    }
+
+    @Test void splitsOnlyAfterWholeChannelFailsAndKeepsWordsOnBothSides() throws Exception {
+        WhisperClient client = mock(WhisperClient.class);
+        AtomicInteger calls = new AtomicInteger();
+        when(client.post(anyString(), any(byte[].class))).thenAnswer(call -> {
+            int n = calls.getAndIncrement();
+            if (n < 2) return new WhisperClient.Reply(503, "error");
+            return n == 2
+                    ? new WhisperClient.Reply(200, "{\"words\":[{\"word\":\"первое\",\"start\":10.4,\"end\":10.8}]}")
+                    : new WhisperClient.Reply(200, "{\"words\":[{\"word\":\"второе\",\"start\":0.6,\"end\":0.8}]}");
+        });
+        try (InterviewAudioSpool source = new InterviewAudioSpool(directory, "edge", false)) {
+            source.append(0, new byte[22 * 32_000], null); source.seal(22L * 16_000);
+            var result = new PostInterviewWhisper(source).transcribe(
+                    List.of(new PostInterviewWhisper.SpeechEvidence(0, 10 * 16_000 + 6_400, 10 * 16_000 + 12_800, 1)),
+                    client, (a, b) -> {});
+            assertEquals(4, calls.get());
+            assertEquals(2, result.words().size());
+            assertTrue(result.gaps().isEmpty());
+            assertEquals(Math.round(10.4 * 16_000), result.words().get(0).start());
+        }
+    }
+
+    @Test void returnsUnresolvedSpeechGapsForVoskFallback() throws Exception {
+        WhisperClient client = mock(WhisperClient.class);
+        when(client.post(anyString(), any(byte[].class))).thenReturn(new WhisperClient.Reply(200, "{\"words\":[]}"));
+        try (InterviewAudioSpool source = new InterviewAudioSpool(directory, "edge", false)) {
+            source.append(0, new byte[22 * 32_000], null); source.seal(22L * 16_000);
+            var result = new PostInterviewWhisper(source).transcribe(
+                    List.of(new PostInterviewWhisper.SpeechEvidence(0, 10 * 16_000, 11 * 16_000)), client, (a, b) -> {});
+            assertEquals(1, result.gaps().size());
+            assertEquals(0, result.gaps().get(0).start());
+            assertEquals(11 * 16_000L, result.gaps().get(0).end());
         }
     }
 

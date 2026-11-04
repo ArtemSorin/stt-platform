@@ -1,6 +1,8 @@
 package ru.sttplatform.gateway.session;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import ru.sttplatform.common.audio.Pcm;
 import ru.sttplatform.common.json.Json;
 import ru.sttplatform.common.ws.WsPeer;
@@ -42,6 +44,7 @@ import java.util.function.Consumer;
  * @version 1.0.0
  */
 public final class Orchestrator implements AutoCloseable {
+    private static final Logger log = LoggerFactory.getLogger(Orchestrator.class);
     private static final int RATE = Pcm.RATE;
     // Финальная разметка может высвободить много кадров по 160 мс сразу;
     // очередь должна вмещать ответ длиннее десяти секунд.
@@ -164,6 +167,7 @@ public final class Orchestrator implements AutoCloseable {
     private long lastAppliedPeekRequestId;
     private volatile String mixedPartial = "", microphonePartial = "", whisperState = "выключен", failure;
     private volatile String microphoneWarning, candidateWarning;
+    private volatile boolean transcriptFallback;
     private volatile String currentRole = "Ожидаем речь";
     private final StringBuilder mixedTranscript = new StringBuilder();
     private volatile Map<String, Object> question, decision, refined, preview, finalReport;
@@ -733,8 +737,12 @@ public final class Orchestrator implements AutoCloseable {
         }
         while (!audio.isEmpty() && audio.peekFirst().end() <= target) {
             AudioBlock block = audio.peekFirst();
+            var lookahead = audio.iterator();
+            lookahead.next();
+            AudioBlock next = lookahead.hasNext() ? lookahead.next() : null;
             if (separateChannels && answerArmed && block.end() > answerStartSample
-                    && awaitsVoiceRole(block.first(), block.mixed(), spans)) {
+                    && awaitsRoleWithLookahead(block.first(), block.mixed(),
+                    !flush && next != null && next.end() > answerStartSample ? next.mixed() : null, spans)) {
                 // Не отправляем громкий неподтверждённый звук как тишину: начало речи может подтвердиться позже.
                 if (!flush && capturedSamples - block.first() < MAX_UNCONFIRMED_SAMPLES) break;
                 candidateWarning = "Часть системного звука не удалось подтвердить как речь кандидата; проверьте расшифровку.";
@@ -813,6 +821,11 @@ public final class Orchestrator implements AutoCloseable {
                     && Math.min(end, span.end()) > Math.max(first, span.start())) return false;
         }
         return true;
+    }
+
+    static boolean awaitsRoleWithLookahead(long first, byte[] pcm, byte[] next, List<VoiceSpan> spans) {
+        return awaitsVoiceRole(first, pcm, spans)
+                || (next != null && awaitsVoiceRole(first + pcm.length / 2L, next, spans));
     }
 
     static byte[] gateCandidateAudio(long first, byte[] pcm, List<VoiceSpan> spans,
@@ -1486,6 +1499,7 @@ public final class Orchestrator implements AutoCloseable {
                 if (error instanceof InterruptedException) Thread.currentThread().interrupt();
                 whisperState = "ошибка повторного прохода";
                 transcriptError = "Не удалось обработать полную запись Whisper: " + error.getMessage();
+                log.error("Итоговая транскрипция не завершилась; аудиозапись сохранена для диагностики", error);
                 logQuietly(Json.map("type", "whisper_postprocess_error", "error", error.toString(),
                         "fallback", "none"));
             }
@@ -1515,6 +1529,40 @@ public final class Orchestrator implements AutoCloseable {
         PostInterviewWhisper.Result result = new PostInterviewWhisper(audioSpool).transcribe(evidence, whisperClient,
                 (done, total) -> { transcriptChunksDone = done; transcriptChunksTotal = total; });
         List<Map<String, Object>> rows = new FinalTranscriptBuilder().build(audioSpool, result.words(), roles, testMode);
+        for (PostInterviewWhisper.Gap gap : result.gaps()) {
+            List<PostInterviewWhisper.Word> reserve = new ArrayList<>();
+            synchronized (this) {
+                for (Map<String, Object> word : finalWords) {
+                    int channel = "microphone".equals(word.get("source")) ? 1 : 0;
+                    if (!"vosk".equals(word.get("model")) || channel != gap.channel()
+                            || !(word.get("start") instanceof Number start) || !(word.get("end") instanceof Number end)) continue;
+                    long first = Math.round(start.doubleValue() * RATE), last = Math.round(end.doubleValue() * RATE);
+                    long midpoint = first + (last - first) / 2;
+                    if (midpoint >= gap.start() && midpoint < gap.end())
+                        reserve.add(new PostInterviewWhisper.Word(channel, String.valueOf(word.get("word")), first, last, -1, null));
+                }
+            }
+            if (reserve.isEmpty()) {
+                rows.add(Json.map("word", "[Аудио этого участка не распознано]", "word_id", "gap:" + gap.channel() + ":" + gap.start(),
+                        "start", gap.start() / (double) RATE, "end", gap.end() / (double) RATE,
+                        "role", testMode ? "Кандидат" : gap.channel() == 1 ? "Интервьюер 1" : "Не определено",
+                        "source", gap.channel() == 1 ? "microphone" : "system",
+                        "speaker_id", "gap", "model", "unavailable", "status", "final"));
+            } else {
+                List<Map<String, Object>> fallbackRows = new FinalTranscriptBuilder().build(audioSpool, reserve, roles, testMode);
+                for (Map<String, Object> row : fallbackRows) {
+                    row.put("role", row.get("role") + " (резерв Vosk)");
+                    row.put("model", "vosk");
+                    row.put("word_id", "fallback:" + gap.channel() + ":" + gap.start() + ":" + row.get("word_id"));
+                }
+                rows.addAll(fallbackRows);
+            }
+            logQuietly(Json.map("type", "whisper_postprocess_gap", "channel", gap.channel(),
+                    "start_s", Json.round(gap.start() / (double) RATE, 3),
+                    "end_s", Json.round(gap.end() / (double) RATE, 3),
+                    "fallback", reserve.isEmpty() ? "unavailable" : "vosk", "words", reserve.size()));
+        }
+        transcriptFallback = !result.gaps().isEmpty();
         synchronized (this) {
             fullTranscriptWords = List.copyOf(rows);
             for (PostInterviewWhisper.Chunk chunk : result.chunks())
@@ -1522,7 +1570,7 @@ public final class Orchestrator implements AutoCloseable {
                         "start_s", Json.round(chunk.start() / (double) RATE, 3),
                         "end_s", Json.round(chunk.end() / (double) RATE, 3), "words", chunk.words()));
             logQuietly(Json.map("type", "whisper_postprocess", "chunks", result.chunks().size(),
-                    "words", rows.size(), "fallback", "none"));
+                    "words", rows.size(), "fallback", transcriptFallback ? "vosk_or_gap" : "none"));
         }
     }
 
@@ -1727,6 +1775,9 @@ public final class Orchestrator implements AutoCloseable {
 
     /** @return причина недоступности полной транскрипции или {@code null} */
     public String transcriptError() { return transcriptError; }
+
+    /** @return использовался ли резервный текст или остался нераспознанный участок */
+    public boolean transcriptFallback() { return transcriptFallback; }
 
     /** Отмечает потерю исходного канала, не останавливая подсказки.
      * @param reason описание потери */

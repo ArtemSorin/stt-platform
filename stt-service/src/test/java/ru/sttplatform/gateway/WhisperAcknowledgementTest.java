@@ -6,6 +6,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 import ru.sttplatform.common.json.Json;
 import ru.sttplatform.stt.transcript.InterviewAudioSpool;
 import ru.sttplatform.stt.transcript.FinalTranscriptBuilder;
+import ru.sttplatform.stt.transcript.TranscriptStore;
+import ru.sttplatform.gateway.config.GatewayProperties;
 import ru.sttplatform.stt.whisper.WhisperClient;
 
 import java.io.BufferedWriter;
@@ -117,6 +119,59 @@ class WhisperAcknowledgementTest {
             assertEquals(List.of("кандидат", "интервьюер"), result.stream().map(row -> row.get("word")).toList());
             assertEquals(List.of("Кандидат", "Интервьюер 1"), result.stream().map(row -> row.get("role")).toList());
             assertTrue(orchestrator.transcriptComplete());
+        }
+    }
+
+    @Test void finalPassUsesMarkedVoskOnlyForTheFailedChannel() throws Exception {
+        Orchestrator orchestrator = mock(Orchestrator.class, CALLS_REAL_METHODS);
+        WhisperClient client = mock(WhisperClient.class);
+        when(client.post(eq("/transcribe-json"), any(byte[].class))).thenAnswer(call -> {
+            byte[] pcm = call.getArgument(1);
+            return pcm[0] == 1 ? new WhisperClient.Reply(503, "unavailable")
+                    : new WhisperClient.Reply(200, "{\"words\":[{\"word\":\"вопрос\",\"start\":0.1,\"end\":0.5}]}");
+        });
+        try (var source = new InterviewAudioSpool(directory, "session", true)) {
+            byte[] system = new byte[32_000], mic = new byte[32_000];
+            java.util.Arrays.fill(system, (byte) 1); java.util.Arrays.fill(mic, (byte) 2);
+            source.append(0, system, mic); source.seal(16_000);
+            set(orchestrator, "audioSpool", source);
+            set(orchestrator, "whisperClient", client);
+            set(orchestrator, "timelineLog", new BufferedWriter(new StringWriter()));
+            set(orchestrator, "finalWords", new ArrayList<>(List.of(new LinkedHashMap<>(Map.of(
+                    "word", "резерв", "start", .1, "end", .5, "model", "vosk", "source", "system", "status", "replaced_by_whisper")))));
+            set(orchestrator, "finalDiarizationSpans", List.of(new FinalTranscriptBuilder.SpeakerSpan(0, 16_000, "Кандидат", "c")));
+            ReflectionTestUtils.invokeMethod(orchestrator, "postprocessWhisper");
+            var result = orchestrator.finalTranscriptWords();
+            assertEquals(2, result.size());
+            assertTrue(result.stream().anyMatch(row -> "вопрос".equals(row.get("word")) && "whisper".equals(row.get("model"))));
+            assertTrue(result.stream().anyMatch(row -> "резерв".equals(row.get("word")) && "Кандидат (резерв Vosk)".equals(row.get("role"))));
+            assertTrue(orchestrator.transcriptFallback());
+            assertTrue(orchestrator.transcriptComplete());
+            Path sessionDir = directory.resolve("output").resolve("session");
+            var store = new TranscriptStore(new GatewayProperties(null, null, sessionDir.getParent().toString()));
+            store.publish(sessionDir, "83394956-cbfb-4ce8-8f4c-a746a6ba2287", result);
+            String markdown = java.nio.file.Files.readString(sessionDir.resolve("transcripts/transcript.md"));
+            assertTrue(markdown.contains("Кандидат (резерв Vosk): резерв"));
+            assertTrue(markdown.contains("Интервьюер 1: вопрос"));
+        }
+    }
+
+    @Test void marksUnrecognizedAudioWhenNeitherWhisperNorVoskHasWords() throws Exception {
+        Orchestrator orchestrator = mock(Orchestrator.class, CALLS_REAL_METHODS);
+        WhisperClient client = mock(WhisperClient.class);
+        when(client.post(eq("/transcribe-json"), any(byte[].class))).thenReturn(new WhisperClient.Reply(503, "unavailable"));
+        try (var source = new InterviewAudioSpool(directory, "session", true)) {
+            source.append(0, new byte[32_000], new byte[32_000]); source.seal(16_000);
+            set(orchestrator, "audioSpool", source);
+            set(orchestrator, "whisperClient", client);
+            set(orchestrator, "timelineLog", new BufferedWriter(new StringWriter()));
+            set(orchestrator, "finalWords", new ArrayList<>());
+            set(orchestrator, "finalDiarizationSpans", List.of());
+            ReflectionTestUtils.invokeMethod(orchestrator, "postprocessWhisper");
+            var result = orchestrator.finalTranscriptWords();
+            assertEquals(2, result.size());
+            assertTrue(result.stream().allMatch(row -> "[Аудио этого участка не распознано]".equals(row.get("word"))));
+            assertTrue(orchestrator.transcriptFallback());
         }
     }
 

@@ -10,7 +10,10 @@
       const value = await response.text();
       if (number === requestNumber) {
         el('transcript-full').textContent = value || 'Речь не распознана.';
-        actions.hidden = false; el('transcript-result-state').textContent = 'Транскрипция готова.';
+        actions.hidden = false;
+        el('transcript-result-state').textContent = value.includes('(резерв Vosk)') || value.includes('[Аудио этого участка не распознано]')
+          ? 'Транскрипция готова с резервом или нераспознанными участками. Проверьте отмеченные фрагменты.'
+          : 'Транскрипция готова.';
       }
     } catch (error) {
       if (number === requestNumber) { loadedKey = ''; actions.hidden = true; el('transcript-result-state').textContent = 'Не удалось прочитать транскрипцию: ' + error.message; }
@@ -34,7 +37,7 @@
       else if (phase === 'stopping') {
         panel.hidden = false; actions.hidden = true;
         el('transcript-result-state').textContent = progress
-          ? `Whisper обрабатывает запись: ${progress.done} из ${progress.total} фрагментов.`
+          ? `Whisper обрабатывает запись: ${progress.done} из ${progress.total} каналов.`
           : 'Готовим полную транскрипцию после интервью.';
       }
       else if (phase === 'live' || phase === 'enrolling' || phase === 'preparing') {

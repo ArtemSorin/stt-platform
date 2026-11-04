@@ -35,3 +35,18 @@ test('result becomes available only after completion and old links load after re
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(element('transcript-full').textContent, 'время');
 });
+
+test('shows a warning while allowing download of a transcript with Vosk fallback', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../../main/resources/static/transcript-view.js'), 'utf8');
+  const nodes = new Map();
+  const element = id => { if (!nodes.has(id)) nodes.set(id, {hidden:true, textContent:'', href:''}); return nodes.get(id); };
+  const window = {};
+  vm.runInNewContext(source, {window, document:{getElementById:element},
+    location:{pathname:'/integrated.html', search:''}, URLSearchParams, encodeURIComponent,
+    fetch:async () => ({ok:true,text:async()=> '[00:00:00.000–00:00:01.000] Кандидат (резерв Vosk): ответ'})});
+  window.transcriptView.update('finished', {plain:'a', timed:'b', zip:'c'}, null, 'id');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(element('transcript-actions').hidden, false);
+  assert.match(element('transcript-result-state').textContent, /резервом/);
+  assert.equal(element('transcript-zip').href, 'c');
+});

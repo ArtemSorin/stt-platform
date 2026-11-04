@@ -475,7 +475,7 @@ components:
             transcript_error: {type: string}
             transcript_progress:
               type: [object, 'null']
-              description: Число обработанных и общее число частей итогового прохода Whisper.
+              description: Число обработанных и общее число каналов итогового прохода Whisper.
               properties:
                 done: {type: integer, minimum: 0}
                 total: {type: integer, minimum: 0}

@@ -87,7 +87,7 @@ public class WhisperClient {
      */
     public Reply post(String path, byte[] pcm) throws IOException, InterruptedException {
         HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl() + path))
-                .timeout(Duration.ofSeconds(120))
+                .timeout(Duration.ofSeconds(Math.min(7200L, 120L + 4L * (pcm.length / 32_000L))))
                 .header("Content-Type", "application/octet-stream")
                 .POST(HttpRequest.BodyPublishers.ofByteArray(pcm)).build();
         HttpResponse<String> r = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));

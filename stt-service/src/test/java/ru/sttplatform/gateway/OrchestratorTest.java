@@ -33,6 +33,17 @@ class OrchestratorTest {
     }
 
     @Test
+    void quiet_leading_frame_waits_when_next_frame_has_unconfirmed_voice() {
+        byte[] quiet = { (byte) 185, 0, (byte) 185, 0 };
+        byte[] speech = {0x10, 0x27, 0x10, 0x27};
+        assertFalse(Orchestrator.awaitsVoiceRole(10, quiet, List.of()));
+        assertTrue(Orchestrator.awaitsRoleWithLookahead(10, quiet, speech, List.of()));
+        assertFalse(Orchestrator.awaitsRoleWithLookahead(10, quiet, speech,
+                List.of(new Orchestrator.VoiceSpan(10, 14, "Кандидат", "1", false))));
+        assertFalse(Orchestrator.awaitsRoleWithLookahead(10, quiet, null, List.of()));
+    }
+
+    @Test
     void separate_candidate_audio_survives_an_overlapping_interviewer_span() {
         byte[] system = {1, 1, 2, 2, 3, 3, 4, 4};
         var spans = List.of(new Orchestrator.VoiceSpan(10, 14, "Кандидат", "candidate", false),
