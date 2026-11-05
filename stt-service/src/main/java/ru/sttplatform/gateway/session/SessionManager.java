@@ -13,6 +13,7 @@ import ru.sttplatform.diarization.session.DiarizationSession;
 import ru.sttplatform.diarization.session.SessionException;
 import ru.sttplatform.diarization.session.SessionRegistry;
 import ru.sttplatform.stt.whisper.WhisperClient;
+import ru.sttplatform.stt.transcript.TranscriptStore;
 import ru.sttplatform.stt.vosk.SpeechSessionFactory;
 import ru.sttplatform.stt.integration.IntegrationProperties;
 
@@ -50,12 +51,15 @@ public class SessionManager {
         volatile boolean finalizing, done;
         volatile String phase = "enrolling";
         volatile String failure;
+        volatile boolean transcriptReady;
+        volatile String transcriptError;
         Active(String id) { this(id, false); }
         Active(String id, boolean testMode) { this.id = id; this.testMode = testMode; }
     }
 
     private final SessionRegistry diarizationSessions;
     private final GatewayProperties props;
+    private final TranscriptStore transcriptStore;
     private final SpeechSessionFactory speechSessions;
     private final IntegrationProperties integrationProps;
     private volatile Active current;
@@ -73,6 +77,7 @@ public class SessionManager {
                           SpeechSessionFactory speechSessions, IntegrationProperties integrationProps) {
         this.diarizationSessions = diarizationSessions;
         this.props = props;
+        this.transcriptStore = new TranscriptStore(props);
         this.speechSessions = speechSessions;
         this.integrationProps = integrationProps;
         this.whisperClient = whisper;
@@ -122,7 +127,7 @@ public class SessionManager {
             test.orchestrator = new Orchestrator(Path.of(props.outputDir()).toAbsolutePath().normalize()
                     .resolve(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + "-test-" + test.id.substring(0, 8)),
                     props.sttUrl(), props.analyticsUrl(), test.id, whisperEnabled && whisperClient.configured(), speechSessions,
-                    integrationProps, whisperClient, true, candidate);
+                    integrationProps, whisperClient, true, candidate, false, Path.of(props.audioSpoolDir()));
             test.phase = "live";
             current = test;
             return status(test.id);
@@ -179,7 +184,7 @@ public class SessionManager {
             a.orchestrator = new Orchestrator(Path.of(props.outputDir()).toAbsolutePath().normalize()
                     .resolve(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + "-" + a.id.substring(0, 8)),
                     props.sttUrl(), props.analyticsUrl(), a.id, whisperClient.configured(), speechSessions, integrationProps,
-                    whisperClient, false, "", "channels".equals(audioMode));
+                    whisperClient, false, "", "channels".equals(audioMode), Path.of(props.audioSpoolDir()));
             a.audioMode = audioMode;
             session.setListener(event -> onDiarizationEvent(a, Json.MAPPER.valueToTree(event)));
         } catch (RuntimeException | java.io.IOException failure) {
@@ -204,8 +209,18 @@ public class SessionManager {
      * @param pcm PCM16 16 кГц моно
      */
     public synchronized void liveAudio(String token, long sequence, byte[] pcm) {
+        liveAudio(token, sequence, pcm, true);
+    }
+
+    /** Передаёт моноаудио, сохраняя его и вне активного ответа тестового режима.
+     * @param token идентификатор сессии
+     * @param sequence номер кадра
+     * @param pcm звук
+     * @param candidateEnabled направлять ли звук в анализ ответа */
+    public synchronized void liveAudio(String token, long sequence, byte[] pcm, boolean candidateEnabled) {
         Active a = require(token);
-        acceptLive(a, sequence, pcm, null, "mono");
+        if (!a.testMode && !candidateEnabled) throw new ApiException(400, "Отключение анализа доступно только в тестовом режиме.");
+        acceptLive(a, sequence, pcm, null, "mono", candidateEnabled);
     }
 
     /** Принимает пару синхронных дорожек без смешивания.
@@ -216,7 +231,7 @@ public class SessionManager {
     public synchronized void liveAudioChannels(String token, long sequence, byte[] interleaved) {
         Active a = require(token);
         AudioChannels channels = splitChannels(interleaved);
-        acceptLive(a, sequence, channels.system(), channels.microphone(), "channels");
+        acceptLive(a, sequence, channels.system(), channels.microphone(), "channels", true);
     }
 
     record AudioChannels(byte[] system, byte[] microphone) {}
@@ -235,7 +250,7 @@ public class SessionManager {
         return new AudioChannels(system, microphone);
     }
 
-    private void acceptLive(Active a, long sequence, byte[] pcm, byte[] microphone, String audioMode) {
+    private void acceptLive(Active a, long sequence, byte[] pcm, byte[] microphone, String audioMode, boolean candidateEnabled) {
         if (a.orchestrator == null || (!a.testMode && a.diarization == null) || !"live".equals(a.phase) || a.finalizing)
             throw new ApiException(409, "Анализ аудио сейчас недоступен.");
         if (!a.audioMode.equals(audioMode))
@@ -251,7 +266,7 @@ public class SessionManager {
         }
         a.expectedLiveSequence++;
         try {
-            if (microphone == null) a.orchestrator.submit(a.acceptedSamples, pcm);
+            if (microphone == null) a.orchestrator.submit(a.acceptedSamples, pcm, candidateEnabled);
             else a.orchestrator.submitChannels(a.acceptedSamples, pcm, microphone);
         } catch (RuntimeException e) {
             stopWithError(a, "Передача звука в STT остановилась: " + e.getMessage());
@@ -314,6 +329,8 @@ public class SessionManager {
         Active a;
         synchronized (this) {
             a = require(token);
+            if (a.orchestrator != null && Set.of("capture_error", "system_audio_lost", "microphone_lost").contains(reason))
+                a.orchestrator.audioCaptureLost("Запись одного из источников прервалась; полная транскрипция недоступна.");
         }
         if (a.testMode) {
             synchronized (this) {
@@ -351,7 +368,7 @@ public class SessionManager {
         a.phase = phase;
         Orchestrator orchestrator = a.orchestrator;
         if (orchestrator != null) {
-            result.put("integration", orchestrator.status());
+            result.put("integration", integrationStatus(a));
             if (TERMINAL.contains(phase) && !a.done) result.put("phase", "stopping");   // отчёт ещё готовится
             else if (a.done) {
                 Object bridgeError = orchestrator.status().get("bridge_error");
@@ -373,8 +390,28 @@ public class SessionManager {
         state.put("queue_depth_chunks", 0);
         state.put("role", "Кандидат · тестовый режим без диаризации");
         if (a.failure != null) state.put("error", a.failure);
-        if (a.orchestrator != null) state.put("integration", a.orchestrator.status());
+        if (a.orchestrator != null) state.put("integration", integrationStatus(a));
         return state;
+    }
+
+    /** Проверяет завершение текущей сессии перед выдачей опубликованных файлов.
+     * @param id идентификатор сессии
+     * @return разрешена ли проверка файлов в хранилище
+     */
+    public boolean transcriptAccessible(String id) {
+        Active a = current;
+        return a == null || !a.id.equals(id) || (a.done && a.transcriptReady);
+    }
+
+    private Map<String, Object> integrationStatus(Active a) {
+        Map<String, Object> status = new LinkedHashMap<>(a.orchestrator.status());
+        if (a.done && a.transcriptReady) {
+            String base = "/api/interviews/" + a.id + "/transcripts/";
+            status.put("transcripts", Json.map("plain", base + "transcript.md",
+                    "timed", base + "transcript-timed.md", "zip", base + "transcripts.zip"));
+        }
+        if (a.done && a.transcriptError != null) status.put("transcript_error", a.transcriptError);
+        return status;
     }
 
     private void onDiarizationEvent(Active a, JsonNode event) {
@@ -436,6 +473,7 @@ public class SessionManager {
             a.failure = "Не удалось завершить тестовое интервью: " + error;
             log.error("Завершение тестового интервью", error);
         } finally {
+            publishTranscript(a);
             a.orchestrator.close();
             a.done = true;
             a.finalizing = false;
@@ -451,23 +489,54 @@ public class SessionManager {
                 if (TERMINAL.contains(String.valueOf(status.get("phase"))) || System.nanoTime() > deadline) break;
                 Thread.sleep(200);
             }
+            boolean complete = "finished".equals(String.valueOf(status.get("phase")));
+            if (!complete && a.failure == null) a.failure = "Диаризация не завершилась успешно; роли системного канала не определены.";
             double audioSeconds = status.get("audio_seconds") instanceof Number n ? n.doubleValue() : 0;
-            a.orchestrator.finish(audioSeconds, requireDiarization(a).segments());
+            requireDiarization(a).setListener(null);
+            a.orchestrator.finish(audioSeconds, complete ? requireDiarization(a).segments() : List.of(), complete);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             a.failure = "Завершение интервью прервано.";
         } catch (Throwable e) {
-            a.failure = "Не удалось завершить интервью: " + e;
+            if (a.failure == null) a.failure = "Не удалось завершить интервью: " + e;
             log.error("Завершение интервью", e);
+            try { a.orchestrator.finish(a.acceptedSamples / 16_000.0, List.of(), false); }
+            catch (Throwable finalizationError) { log.error("Завершение STT без диаризации", finalizationError); }
         } finally {
+            publishTranscript(a);
             a.orchestrator.close();
             if (a.diarization != null) a.diarization.setListener(null);
             a.done = true;
         }
     }
 
+    private void publishTranscript(Active a) {
+        if (!a.orchestrator.transcriptComplete()) {
+            String reason = a.orchestrator.transcriptError();
+            a.transcriptError = reason == null ? "Транскрипция недоступна: обработка интервью не завершилась." : reason;
+            return;
+        }
+        try {
+            transcriptStore.publish(a.orchestrator.outputDirectory(), a.id, a.orchestrator.finalTranscriptWords());
+            a.transcriptReady = true;
+            try { if (!a.orchestrator.transcriptFallback()) a.orchestrator.deleteAudioSpool(); }
+            catch (Exception error) { log.warn("Не удалось удалить временную аудиозапись: {}", error.toString()); }
+        } catch (Exception error) {
+            a.transcriptError = "Не удалось сохранить транскрипцию: " + error.getMessage();
+            log.error("Сохранение транскрипции", error);
+        }
+    }
+
+    /** Отмечает потерю микрофона без прерывания системного аудиоканала.
+     * @param token идентификатор сессии */
+    public synchronized void microphoneLost(String token) {
+        Active a = require(token);
+        if (a.orchestrator != null) a.orchestrator.audioCaptureLost("Микрофон отключился; полная транскрипция недоступна.");
+    }
+
     private void stopWithError(Active a, String message) {
         a.failure = message;
+        log.warn("Интервью остановлено: {}", message);
         if (a.testMode) {
             finish(a.id, "capture_error");
             return;

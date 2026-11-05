@@ -8,9 +8,20 @@ class PcmProcessor extends AudioWorkletProcessor {
     this.cnt = 0;
     this.out = new Int16Array(800);       // 50 мс при 16 кГц
     this.n = 0;
+    this.active = false;
+    this.port.onmessage = event => {
+      if (event.data === 'start') { this.n = 0; this.active = true; }
+      if (event.data === 'stop') {
+        this.active = false;
+        if (this.n) this.port.postMessage(this.out.buffer.slice(0, this.n * 2));
+        this.n = 0;
+        this.port.postMessage({type:'stopped'});
+      }
+    };
   }
 
   process(inputs) {
+    if (!this.active) return true;
     const ch = inputs[0] && inputs[0][0];
     if (!ch) return true;
     for (let i = 0; i < ch.length; i++) {

@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 let stream, context, source, worklet, sessionId;
 let mode = 'idle', captureEnabled = false, sequence = 0, pending = Promise.resolve();
-let polling = false, questionKey = '', scheduledQuestion = '', questionTimer, finishRequested = false;
+let polling = false, questionKey = '', scheduledQuestion = '', questionTimer, finishRequested = false, stopResolver;
 
 async function request(path, body, headers = {}) {
   const response = await fetch(path, {method: body === undefined ? 'GET' : 'POST', body,
@@ -38,9 +38,11 @@ async function start() {
     source = context.createMediaStreamSource(stream);
     worklet = new AudioWorkletNode(context, 'pcm-processor');
     worklet.port.onmessage = event => {
-      if (!captureEnabled || mode !== 'live') return;
+      if (event.data?.type === 'stopped') { stopResolver?.(); stopResolver = undefined; return; }
+      if (mode !== 'live' && mode !== 'stopping') return;
       const number = sequence++;
-      pending = pending.then(() => request('/api/audio', event.data, {'X-Sequence':String(number)}));
+      const candidateEnabled = captureEnabled;
+      pending = pending.then(() => request('/api/audio', event.data, {'X-Sequence':String(number), 'X-Candidate-Enabled':String(candidateEnabled)}));
       pending.catch(error => { showError(error.message); finish('capture_error'); });
     };
     const mute = context.createGain(); mute.gain.value = 0;
@@ -49,6 +51,7 @@ async function start() {
     const state = await request('/api/test/start', JSON.stringify({candidate:$('candidate').value.trim(),
       whisperEnabled:$('whisper').checked}), {'Content-Type':'application/json'});
     sessionId = state.session_id; sequence = 0; mode = 'live'; finishRequested = false;
+    worklet.port.postMessage('start');
     $('setup').classList.add('hidden'); $('controls').classList.remove('hidden');
     $('interview').classList.remove('hidden'); $('finish').disabled = false;
     stream.getAudioTracks()[0].onended = () => finish('microphone_lost');
@@ -60,6 +63,7 @@ async function start() {
 async function askQuestion(question) {
   if (mode !== 'live' || !question || scheduledQuestion === questionKey) return;
   scheduledQuestion = questionKey;
+  captureEnabled = false;
   $('skip').disabled = true; $('asked').disabled = true;
   if (!$('tts').checked || !('speechSynthesis' in window)) {
     $('asked').classList.remove('hidden'); $('asked').disabled = false;
@@ -89,6 +93,7 @@ async function askQuestion(question) {
 }
 function render(state) {
   const phase = state.phase || 'idle', integration = state.integration || {};
+  window.transcriptView?.update(phase, integration.transcripts, integration.transcript_error, state.session_id, integration.transcript_progress);
   $('status').textContent = ({live:'Интервью идёт · без диаризации',stopping:'Формируется отчёт',finished:'Интервью завершено',error:'Ошибка обработки'})[phase] || phase;
   if (state.error || integration.bridge_error) showError(state.error || integration.bridge_error);
   $('partial').textContent = integration.mixed_partial || 'Ожидание речи';
@@ -146,13 +151,23 @@ async function poll() {
 }
 async function finish(reason = 'requested') {
   if (mode !== 'live' || finishRequested) return;
-  finishRequested = true; mode = 'stopping'; captureEnabled = false;
+  finishRequested = true; mode = 'stopping';
   $('finish').disabled = true; $('status').textContent = 'Завершение и ожидание отчёта';
   try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { stopResolver = undefined; reject(new Error('Не удалось завершить захват микрофона.')); }, 2000);
+      stopResolver = () => { clearTimeout(timer); resolve(); };
+      worklet.port.postMessage('stop');
+    });
+    captureEnabled = false;
     await pending;
     await request('/api/finish', new Uint8Array(), {'X-Stop-Reason':reason});
     cleanup(); mode = 'stopping';
-  } catch (error) { showError(error.message); cleanup(); mode = 'done'; $('start').disabled = false; }
+  } catch (error) {
+    showError(error.message);
+    try { await request('/api/finish', new Uint8Array(), {'X-Stop-Reason':'capture_error'}); } catch (_) {}
+    cleanup(); mode = 'done'; $('start').disabled = false;
+  }
 }
 $('start').onclick = start;
 $('finish').onclick = () => finish();

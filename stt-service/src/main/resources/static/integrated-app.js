@@ -145,6 +145,7 @@ function render(status) {
   if (integration.bridge_error) showError(integration.bridge_error);
   if (integration.microphone_warning) showError(integration.microphone_warning);
   if (integration.candidate_warning) showError(integration.candidate_warning);
+  window.transcriptView?.update(phase, integration.transcripts, integration.transcript_error, status.session_id, integration.transcript_progress);
   renderTranscript(integration);
   renderFinalReport(integration.report, integration.excel, phase);
 
@@ -398,6 +399,7 @@ async function prepareAudio() {
     // Прекращённая дорожка даёт тишину; системный канал продолжает записываться.
     showError('Микрофон отключился. Речь кандидата продолжает обрабатываться, но речь интервьюера не записывается.');
     log('Микрофон отключился; системный звук остаётся активным.');
+    request('/api/audio/microphone-lost', new Uint8Array()).catch(error => showError(error.message));
   };
   await context.resume();
   if (!systemAudioAvailable()) throw new Error('Демонстрация экрана или системный звук прервались до начала.');

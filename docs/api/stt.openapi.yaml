@@ -4,8 +4,8 @@ info:
   version: 1.0.0
   description: >-
     Локальный API stt-service. Включает браузерные маршруты и API Vosk/Whisper.
-    Диаризация управляется внутри процесса и отдельного HTTP-контроллера не имеет. Браузерный аудиоформат — mono PCM16 little-endian,
-    16 кГц; параметры сессии передаются заголовком X-Session-Id.
+    Диаризация управляется внутри процесса и отдельного HTTP-контроллера не имеет. Браузер передаёт PCM16 little-endian,
+    16 кГц: два синхронных канала в основном режиме или моно в тестовом; идентификатор передаётся заголовком X-Session-Id.
 servers:
   - url: http://127.0.0.1:8080
     description: Локальная разработка
@@ -137,10 +137,14 @@ paths:
       tags: [Браузерное интервью]
       operationId: sendInterviewAudio
       summary: Передать аудиокадр интервью
-      description: Прежний моно-режим; в тестовом сценарии весь звук считается речью кандидата.
+      description: Моно-режим. В тестовом сценарии весь звук сохраняется для итогового Whisper, а в оценку направляется только активный ответ.
       parameters:
         - $ref: '#/components/parameters/SessionIdRequired'
         - $ref: '#/components/parameters/Sequence'
+        - name: X-Candidate-Enabled
+          in: header
+          description: В тестовом режиме false сохраняет кадр, но исключает его из текущей оценки ответа.
+          schema: {type: boolean, default: true}
       requestBody:
         $ref: '#/components/requestBodies/PcmFrame'
       responses:
@@ -172,6 +176,20 @@ paths:
           $ref: '#/components/responses/Accepted'
         '400':
           $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+  /api/audio/microphone-lost:
+    post:
+      tags: [Браузерное интервью]
+      operationId: reportMicrophoneLost
+      summary: Сообщить о потере микрофонного канала
+      parameters:
+        - $ref: '#/components/parameters/SessionIdRequired'
+      responses:
+        '200':
+          $ref: '#/components/responses/Accepted'
         '403':
           $ref: '#/components/responses/ApiError'
         '409':
@@ -288,6 +306,34 @@ paths:
           $ref: '#/components/responses/ApiError'
         '409':
           $ref: '#/components/responses/ApiError'
+  /api/interviews/{id}/transcripts/{name}:
+    get:
+      tags: [Браузерное интервью]
+      operationId: getInterviewTranscript
+      summary: Прочитать Markdown или скачать ZIP завершённого интервью
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Полный UUID сессии
+          schema: {type: string, format: uuid}
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [transcript.md, transcript-timed.md, transcripts.zip]
+      responses:
+        '200':
+          description: Готовый файл
+          content:
+            text/markdown:
+              schema: {type: string}
+            application/zip:
+              schema: {type: string, format: binary}
+        '404':
+          description: Сессия или готовый файл не найден
+
   /api/reports/{name}:
     get:
       tags: [Браузерное интервью]
@@ -418,6 +464,22 @@ components:
         role: {type: string}
         integration:
           type: object
+          properties:
+            transcripts:
+              type: object
+              description: Ссылки доступны после успешной публикации.
+              properties:
+                plain: {type: string}
+                timed: {type: string}
+                zip: {type: string}
+            transcript_error: {type: string}
+            transcript_progress:
+              type: [object, 'null']
+              description: Число обработанных и общее число каналов итогового прохода Whisper.
+              properties:
+                done: {type: integer, minimum: 0}
+                total: {type: integer, minimum: 0}
+              required: [done, total]
           additionalProperties: true
       additionalProperties: true
     ApiError:

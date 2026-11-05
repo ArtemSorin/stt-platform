@@ -16,6 +16,10 @@ import java.util.List;
  * @version 1.0.0
  */
 public final class Embeddings {
+    /** Минимальная длительность аудио для голосового профиля. */
+    public static final double MIN_DURATION_SECONDS = .65;
+    /** Минимальный среднеквадратичный уровень сигнала. */
+    public static final double MIN_RMS = .003;
     private Embeddings() {}
 
     /**
@@ -47,11 +51,9 @@ public final class Embeddings {
         if (end - start > 2 * trim + 0.2) { start += trim; end -= trim; }
         int first = Math.max(0, (int) Math.rint(start * Pcm.RATE));
         int last = Math.min(audio.length, (int) Math.rint(end * Pcm.RATE));
-        if (last - first < (int) (.65 * Pcm.RATE)) return null;
+        if (last - first < (int) (MIN_DURATION_SECONDS * Pcm.RATE)) return null;
         float[] signal = Arrays.copyOfRange(audio, first, last);
-        double power = 0;
-        for (float sample : signal) power += (double) sample * sample;
-        if (Math.sqrt(power / signal.length) < .003) return null;
+        if (rms(signal) < MIN_RMS) return null;
         OnlineStream stream = extractor.createStream();
         try {
             stream.acceptWaveform(signal, Pcm.RATE);
@@ -63,6 +65,17 @@ public final class Embeddings {
         } finally {
             stream.release();
         }
+    }
+
+    /** Рассчитывает среднеквадратичный уровень PCM-сигнала.
+     * @param signal аудиосэмплы
+     * @return уровень в диапазоне нормированных сэмплов; ноль для пустого сигнала
+     */
+    public static double rms(float[] signal) {
+        if (signal.length == 0) return 0;
+        double power = 0;
+        for (float sample : signal) power += (double) sample * sample;
+        return Math.sqrt(power / signal.length);
     }
 
     /**

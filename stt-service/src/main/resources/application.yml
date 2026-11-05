@@ -40,6 +40,7 @@ gateway:
   stt-url: ${STT_URL:http://127.0.0.1:8080}
   analytics-url: ${ANALYTICS_URL:http://127.0.0.1:8083}
   output-dir: ${GATEWAY_OUTPUT:./runs/integrated}
+  audio-spool-dir: ${GATEWAY_AUDIO_SPOOL_DIR:}
 
 integration:
   end-silence-ms: ${END_SILENCE_MS:450}
