@@ -21,3 +21,7 @@
 
 - [Первое демо — 15 октября](experiments/demo-first.md)
 - [Второе демо — 21 октября](experiments/demo-second.md)
+
+## Открытые вопросы
+
+- [Проблемы текущей реализации транскрипции — 6 ноября 2026](experiments/transcription-open-issues-2026-11-06.md)
