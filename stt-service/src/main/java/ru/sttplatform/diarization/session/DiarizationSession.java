@@ -185,7 +185,10 @@ public final class DiarizationSession {
         float[] candidate = Embeddings.embedding(extractor, voice, 0, seconds, 0);
         if (candidate == null) {
             phase = "retry";
-            error = "Не удалось получить голосовой эталон. Говорите без длинных пауз около 10 секунд и повторите запись.";
+            double rms = Embeddings.rms(voice);
+            error = enrollmentError(seconds, rms);
+            log.warn("Эталон кандидата не создан: session={}, duration_s={}, rms={}", id,
+                    Json.round(seconds, 3), Json.round(rms, 6));
             return;
         }
         try {
@@ -205,6 +208,14 @@ public final class DiarizationSession {
             dispose();
             throw failure;
         }
+    }
+
+    static String enrollmentError(double seconds, double rms) {
+        if (seconds < Embeddings.MIN_DURATION_SECONDS)
+            return "Запись эталона слишком короткая. Попросите кандидата говорить из компьютера около 10 секунд и повторите запись.";
+        if (rms < Embeddings.MIN_RMS)
+            return "Системный звук при записи эталона отсутствует или слишком тихий. Проверьте передачу системного звука и громкость голоса кандидата, затем повторите запись.";
+        return "Не удалось создать голосовой профиль из системного звука. Попросите кандидата говорить разборчиво около 10 секунд и повторите запись.";
     }
 
     /**
