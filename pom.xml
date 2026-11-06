@@ -58,7 +58,10 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
                     <configuration>
-                        <argLine>-Xmx2g -Dfile.encoding=UTF-8 -Djna.encoding=UTF-8</argLine>
+                        <argLine>-Xmx2g -Dfile.encoding=UTF-8 -Djna.encoding=UTF-8 -Dnet.bytebuddy.experimental=true</argLine>
+                        <environmentVariables>
+                            <INTERVIEW_EVENTS_TOKEN>test-only-token-0123456789abcdef0123456789</INTERVIEW_EVENTS_TOKEN>
+                        </environmentVariables>
                     </configuration>
                 </plugin>
             </plugins>
