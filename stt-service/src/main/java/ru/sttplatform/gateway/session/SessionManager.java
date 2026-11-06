@@ -514,16 +514,19 @@ public class SessionManager {
         if (!a.orchestrator.transcriptComplete()) {
             String reason = a.orchestrator.transcriptError();
             a.transcriptError = reason == null ? "Транскрипция недоступна: обработка интервью не завершилась." : reason;
+            a.orchestrator.finishTranscriptTiming(false);
             return;
         }
         try {
             transcriptStore.publish(a.orchestrator.outputDirectory(), a.id, a.orchestrator.finalTranscriptWords());
             a.transcriptReady = true;
+            a.orchestrator.finishTranscriptTiming(true);
             try { if (!a.orchestrator.transcriptFallback()) a.orchestrator.deleteAudioSpool(); }
             catch (Exception error) { log.warn("Не удалось удалить временную аудиозапись: {}", error.toString()); }
         } catch (Exception error) {
             a.transcriptError = "Не удалось сохранить транскрипцию: " + error.getMessage();
             log.error("Сохранение транскрипции", error);
+            a.orchestrator.finishTranscriptTiming(false);
         }
     }
 

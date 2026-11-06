@@ -10,6 +10,7 @@
 - [Итоговая транскрипция двух каналов — 4 ноября 2026](experiments/two-channel-transcript-2026-11-04.md)
 - [Повтор Whisper на границе аудиофрагмента — 4 ноября 2026](experiments/whisper-boundary-retry-2026-11-04.md)
 - [Диагностика записи голосового эталона — 5 ноября 2026](experiments/enrollment-diagnostics-2026-11-05.md)
+- [Замеры времени итоговой транскрипции — 6 ноября 2026](experiments/transcription-timing-2026-11-06.md)
 - [Интеграционный тест распознавания и аналитики](experiments/integration-test.md)
 
 ## Аналитика и отчёт
