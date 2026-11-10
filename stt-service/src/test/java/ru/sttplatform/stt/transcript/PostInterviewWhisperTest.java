@@ -23,7 +23,7 @@ class PostInterviewWhisperTest {
     @Test void recordsAlignedChannelsAndProcessesEverySecondOnlyAfterSeal() throws Exception {
         WhisperClient client = mock(WhisperClient.class);
         List<Integer> seen = new ArrayList<>();
-        when(client.post(eq("/transcribe-json"), any(byte[].class))).thenAnswer(call -> {
+        when(client.post(eq("/transcribe-json-vad"), any(byte[].class))).thenAnswer(call -> {
             byte[] pcm = call.getArgument(1);
             assertEquals(25 * 16_000 * 2, pcm.length);
             seen.add((int) pcm[0]);
@@ -62,9 +62,44 @@ class PostInterviewWhisperTest {
             source.append(0, new byte[32_000], null); source.seal(16_000);
             var pass = new PostInterviewWhisper(source);
             assertTrue(pass.transcribe(List.of(), client, (a, b) -> {}).words().isEmpty());
+            verify(client).post(eq("/transcribe-json-vad"), any(byte[].class));
+
+            clearInvocations(client);
             assertEquals(1, pass.transcribe(List.of(new PostInterviewWhisper.SpeechEvidence(0, 0, 16_000)), client, (a, b) -> {}).gaps().size());
+            verify(client).post(eq("/transcribe-json-vad"), any(byte[].class));
+            verify(client, times(2)).post(eq("/transcribe-json"), any(byte[].class));
+
+            clearInvocations(client);
             assertEquals(1, pass.transcribe(List.of(new PostInterviewWhisper.SpeechEvidence(0, 4_000, 5_600, 800)), client, (a, b) -> {}).gaps().size());
-            verify(client, times(5)).post(anyString(), any(byte[].class));
+            verify(client).post(eq("/transcribe-json-vad"), any(byte[].class));
+            verify(client, times(2)).post(eq("/transcribe-json"), any(byte[].class));
+        }
+    }
+
+    @Test void mergesNearbyUncoveredEvidenceAndRetriesItWithoutVad() throws Exception {
+        WhisperClient client = mock(WhisperClient.class);
+        when(client.post(eq("/transcribe-json-vad"), any(byte[].class))).thenReturn(new WhisperClient.Reply(200,
+                "{\"words\":[{\"word\":\"первое\",\"start\":2.1,\"end\":2.5,\"confidence\":0.9}]}"));
+        when(client.post(eq("/transcribe-json"), any(byte[].class))).thenAnswer(call -> {
+            byte[] pcm = call.getArgument(1);
+            assertEquals(2 * 16_000 * 2, pcm.length);
+            return new WhisperClient.Reply(200,
+                    "{\"words\":[{\"word\":\"тихое\",\"start\":0.6,\"end\":1.4,\"confidence\":0.8}]}" );
+        });
+        try (InterviewAudioSpool source = new InterviewAudioSpool(directory, "vad-retry", false)) {
+            source.append(0, new byte[20 * 32_000], null);
+            source.seal(20L * 16_000);
+            var result = new PostInterviewWhisper(source).transcribe(List.of(
+                    new PostInterviewWhisper.SpeechEvidence(0, 10L * 16_000, 10L * 16_000 + 3_200, 1_000),
+                    new PostInterviewWhisper.SpeechEvidence(0, 10L * 16_000 + 12_800, 11L * 16_000, 1_000)),
+                    client, (a, b) -> {});
+
+            assertEquals(List.of("первое", "тихое"), result.words().stream().map(PostInterviewWhisper.Word::text).toList());
+            assertEquals(List.of(2L * 16_000 + 1_600, 10L * 16_000 + 1_600),
+                    result.words().stream().map(PostInterviewWhisper.Word::start).toList());
+            assertTrue(result.gaps().isEmpty());
+            verify(client).post(eq("/transcribe-json-vad"), any(byte[].class));
+            verify(client).post(eq("/transcribe-json"), any(byte[].class));
         }
     }
 
@@ -115,7 +150,7 @@ class PostInterviewWhisperTest {
             var result = new PostInterviewWhisper(source).transcribe(
                     List.of(new PostInterviewWhisper.SpeechEvidence(0, 10 * 16_000, 11 * 16_000)), client, (a, b) -> {});
             assertEquals(1, result.gaps().size());
-            assertEquals(0, result.gaps().get(0).start());
+            assertEquals(10 * 16_000L, result.gaps().get(0).start());
             assertEquals(11 * 16_000L, result.gaps().get(0).end());
         }
     }

@@ -12,18 +12,20 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.function.BiConsumer;
 
-/** Распознаёт записанные каналы целиком; при сбое локализует проблемный участок. */
+/** Распознаёт записанные каналы с VAD и повторяет непокрытые признаки речи без фильтра. */
 public final class PostInterviewWhisper {
     private static final Logger log = LoggerFactory.getLogger(PostInterviewWhisper.class);
     private static final int RATE = 16_000;
     private static final long MIN_RETRY = 12L * RATE;
     private static final long CONTEXT = RATE / 2L;
+    private static final String TRANSCRIBE_PATH = "/transcribe-json";
+    private static final String TRANSCRIBE_VAD_PATH = "/transcribe-json-vad";
     private final InterviewAudioSpool audio;
 
     /** @param audio закрытая запись интервью */
     public PostInterviewWhisper(InterviewAudioSpool audio) { this.audio = audio; }
 
-    /** Обрабатывает все каналы и сохраняет границы участков, которые не удалось распознать.
+    /** Обрабатывает каналы с VAD и повторяет непокрытые признаки речи без фильтра.
      * @param evidence признаки речи из Vosk и диаризации
      * @param client локальный Whisper
      * @param progress число завершённых каналов и их общее число
@@ -38,14 +40,24 @@ public final class PostInterviewWhisper {
         List<Gap> gaps = new ArrayList<>();
         progress.accept(0, audio.channels());
         for (int channel = 0; channel < audio.channels(); channel++) {
-            if (audio.samples() > 0) process(channel, 0, audio.samples(), evidence, client, words, chunks, gaps);
+            if (audio.samples() > 0) {
+                process(channel, 0, audio.samples(), evidence, client, words, chunks, gaps, true);
+                for (Interval missing : uncoveredEvidence(channel, evidence, words)) {
+                    log.warn("Whisper VAD не покрыл признаки речи в канале {} на участке {}–{} с; повтор без VAD",
+                            channel, missing.start() / (double) RATE, missing.end() / (double) RATE);
+                    process(channel, missing.start(), missing.end(), evidence, client, words, chunks, gaps, false);
+                }
+                addUnresolvedEvidenceGaps(channel, evidence, words, gaps);
+            }
             progress.accept(channel + 1, audio.channels());
         }
-        return new Result(List.copyOf(words), List.copyOf(chunks), List.copyOf(gaps));
+        sortAndDeduplicate(words);
+        return new Result(List.copyOf(words), List.copyOf(chunks), coalesceGaps(gaps));
     }
 
     private void process(int channel, long start, long end, List<SpeechEvidence> evidence, WhisperClient client,
-                         List<Word> words, List<Chunk> chunks, List<Gap> gaps) throws IOException, InterruptedException {
+                         List<Word> words, List<Chunk> chunks, List<Gap> gaps, boolean vadFilter)
+            throws IOException, InterruptedException {
         long readStart = Math.max(0, start - CONTEXT), readEnd = Math.min(audio.samples(), end + CONTEXT);
         boolean speech = evidence.stream().anyMatch(s -> s.channel() == channel
                 && Math.min(end, s.end()) - Math.max(start, s.start()) >= s.minimumOverlap());
@@ -56,10 +68,11 @@ public final class PostInterviewWhisper {
         byte[] pcm = audio.read(channel, readStart, readEnd);
         for (int attempt = 0; attempt < 2; attempt++) {
             try {
-                WhisperClient.Reply reply = client.post("/transcribe-json", pcm);
+                WhisperClient.Reply reply = client.post(vadFilter ? TRANSCRIBE_VAD_PATH : TRANSCRIBE_PATH, pcm);
                 if (reply.status() != 200) throw new IOException("Whisper ответил HTTP " + reply.status());
                 found = parse(reply.body(), channel, index, readStart, readEnd, start, end);
-                if (found.isEmpty() && speech) throw new IOException("Whisper не распознал участок с признаками речи");
+                if (found.isEmpty() && speech && !vadFilter)
+                    throw new IOException("Whisper не распознал участок с признаками речи");
                 failure = null;
                 break;
             } catch (IOException | IllegalArgumentException error) {
@@ -72,8 +85,8 @@ public final class PostInterviewWhisper {
             if (!disconnected && end - start > MIN_RETRY) {
                 long middle = start + (end - start) / 2;
                 log.warn("Whisper не обработал канал {} на участке {}–{} с; повтор по частям", channel, start / (double) RATE, end / (double) RATE);
-                process(channel, start, middle, evidence, client, words, chunks, gaps);
-                process(channel, middle, end, evidence, client, words, chunks, gaps);
+                process(channel, start, middle, evidence, client, words, chunks, gaps, vadFilter);
+                process(channel, middle, end, evidence, client, words, chunks, gaps, vadFilter);
             } else {
                 log.error("Whisper не обработал канал {} на участке {}–{} с; используется резерв", channel, start / (double) RATE, end / (double) RATE, failure);
                 gaps.add(new Gap(channel, start, end));
@@ -90,6 +103,83 @@ public final class PostInterviewWhisper {
         }
         chunks.add(new Chunk(channel, start, end, found.size()));
     }
+
+    private List<Interval> uncoveredEvidence(int channel, List<SpeechEvidence> evidence, List<Word> words) {
+        List<Interval> intervals = evidence.stream()
+                .filter(item -> item.channel() == channel)
+                .filter(item -> !covered(item, words))
+                .map(item -> new Interval(Math.max(0, item.start()), Math.min(audio.samples(), item.end())))
+                .filter(item -> item.end() > item.start())
+                .sorted(Comparator.comparingLong(Interval::start).thenComparingLong(Interval::end))
+                .toList();
+        if (intervals.isEmpty()) return List.of();
+
+        List<Interval> merged = new ArrayList<>();
+        long start = intervals.get(0).start(), end = intervals.get(0).end();
+        for (int i = 1; i < intervals.size(); i++) {
+            Interval next = intervals.get(i);
+            if (next.start() <= end + 2 * CONTEXT) end = Math.max(end, next.end());
+            else { merged.add(new Interval(start, end)); start = next.start(); end = next.end(); }
+        }
+        merged.add(new Interval(start, end));
+        return merged;
+    }
+
+    private static boolean covered(SpeechEvidence evidence, List<Word> words) {
+        long requiredOverlap = Math.max(1, evidence.minimumOverlap());
+        return words.stream().anyMatch(word -> word.channel() == evidence.channel()
+                && Math.min(word.end(), evidence.end()) - Math.max(word.start(), evidence.start()) >= requiredOverlap);
+    }
+
+    private void addUnresolvedEvidenceGaps(int channel, List<SpeechEvidence> evidence, List<Word> words, List<Gap> gaps) {
+        for (SpeechEvidence item : evidence) {
+            if (item.channel() != channel || covered(item, words)) continue;
+            long start = Math.max(0, item.start()), end = Math.min(audio.samples(), item.end());
+            if (end <= start || gaps.stream().anyMatch(gap -> gap.channel() == channel
+                    && gap.start() <= start && gap.end() >= end)) continue;
+            gaps.add(new Gap(channel, start, end));
+        }
+    }
+
+    private static void sortAndDeduplicate(List<Word> words) {
+        words.sort(Comparator.comparingInt(Word::channel).thenComparingLong(Word::start)
+                .thenComparingLong(Word::end));
+        List<Word> unique = new ArrayList<>();
+        for (Word word : words) {
+            int duplicateIndex = -1;
+            for (int i = unique.size() - 1; i >= 0; i--) {
+                Word candidate = unique.get(i);
+                if (candidate.end() <= word.start()) break;
+                if (duplicate(candidate, word)) { duplicateIndex = i; break; }
+            }
+            if (duplicateIndex < 0) unique.add(word);
+            else {
+                Word old = unique.get(duplicateIndex);
+                if (word.confidence() != null && (old.confidence() == null || word.confidence() > old.confidence()))
+                    unique.set(duplicateIndex, word);
+            }
+        }
+        words.clear();
+        words.addAll(unique);
+    }
+
+    private static List<Gap> coalesceGaps(List<Gap> gaps) {
+        List<Gap> ordered = gaps.stream().sorted(Comparator.comparingInt(Gap::channel)
+                .thenComparingLong(Gap::start).thenComparingLong(Gap::end)).toList();
+        if (ordered.isEmpty()) return List.of();
+        List<Gap> merged = new ArrayList<>();
+        Gap current = ordered.get(0);
+        for (int i = 1; i < ordered.size(); i++) {
+            Gap next = ordered.get(i);
+            if (next.channel() == current.channel() && next.start() <= current.end())
+                current = new Gap(current.channel(), current.start(), Math.max(current.end(), next.end()));
+            else { merged.add(current); current = next; }
+        }
+        merged.add(current);
+        return List.copyOf(merged);
+    }
+
+    private record Interval(long start, long end) {}
 
     private static List<Word> parse(String body, int channel, int chunk, long readStart, long readEnd,
                                     long coreStart, long coreEnd) throws IOException {

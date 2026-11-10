@@ -11,6 +11,7 @@
 - [Повтор Whisper на границе аудиофрагмента — 4 ноября 2026](experiments/whisper-boundary-retry-2026-11-04.md)
 - [Диагностика записи голосового эталона — 5 ноября 2026](experiments/enrollment-diagnostics-2026-11-05.md)
 - [Замеры времени итоговой транскрипции — 6 ноября 2026](experiments/transcription-timing-2026-11-06.md)
+- [Фильтрация тишины в итоговой транскрипции — 10 ноября 2026](experiments/transcription-vad-2026-11-10.md)
 - [Интеграционный тест распознавания и аналитики](experiments/integration-test.md)
 
 ## Аналитика и отчёт
@@ -26,6 +27,7 @@
 
 - [Первое демо — 15 октября](experiments/demo-first.md)
 - [Второе демо — 21 октября](experiments/demo-second.md)
+- [Демо конвейера интервью — 6 ноября 2026](experiments/demo-pipeline-2026-11-06.md)
 
 ## Открытые вопросы
 

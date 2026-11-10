@@ -69,6 +69,29 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+  /transcribe-json-vad:
+    post:
+      tags: [Распознавание]
+      operationId: transcribeAudioWithWordsAndVad
+      summary: Распознать аудио с фильтрацией участков без речи
+      description: >-
+        Включает Silero VAD для итогового прохода по сохранённым каналам. Участки речи
+        отделяются при паузе 2000 мс, порог речи равен 0.5, контекст вокруг участка —
+        400 мс. Временные метки остаются относительными к исходному аудиобуферу.
+        Live-распознавание использует /transcribe-json без VAD.
+      requestBody:
+        $ref: '#/components/requestBodies/PcmAudio'
+      responses:
+        '200':
+          description: Текст и распознанные слова
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transcription'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
 components:
   requestBodies:
     PcmAudio:
