@@ -5,6 +5,7 @@
   GET  /                  -> "ok"
   POST /transcribe        -> текст UTF-8
   POST /transcribe-json   -> {"text": "...", "words": [{"word","start","end","confidence"}]}
+  POST /transcribe-json-vad -> тот же JSON с фильтрацией тишины Silero VAD
 Тело запроса: сырой PCM 16 кГц, 16 бит, little-endian, моно; последний байт нечётной длины отбрасывается.
 
 Модель: имя из faster-whisper (small, large-v3-turbo, ...) либо путь к модели в формате CTranslate2,
@@ -21,6 +22,9 @@ from threading import Lock
 MODEL = None
 LOCK = Lock()  # одна модель — один запрос за раз
 ARGS = None
+TRANSCRIBE_JSON = "/transcribe-json"
+TRANSCRIBE_JSON_VAD = "/transcribe-json-vad"
+VAD_PARAMETERS = {"threshold": 0.5, "min_silence_duration_ms": 2000, "speech_pad_ms": 400}
 
 
 def pcm_to_float(body: bytes):
@@ -32,10 +36,11 @@ def pcm_to_float(body: bytes):
     return np.frombuffer(body, dtype="<i2").astype(np.float32) / 32768.0
 
 
-def transcribe(body: bytes):
+def transcribe(body: bytes, vad_filter: bool = False):
     """Распознаёт сырой PCM16 и возвращает текст со словами и временами в секундах.
 
     Для пустого аудио возвращает пустой текст и список слов; вход без WAV-заголовка.
+    VAD включается только для итоговой транскрипции сохранённой записи.
     """
     if ARGS.backend == "fake":
         sample_count = len(body) // 2
@@ -51,9 +56,17 @@ def transcribe(body: bytes):
     if audio.size == 0:
         return "", []
     with LOCK:
+        options = {
+            "language": ARGS.language,
+            "beam_size": ARGS.beam_size,
+            "word_timestamps": True,
+            "vad_filter": vad_filter,
+            "condition_on_previous_text": False,
+        }
+        if vad_filter:
+            options["vad_parameters"] = dict(VAD_PARAMETERS)
         segments, _ = MODEL.transcribe(
-            audio, language=ARGS.language, beam_size=ARGS.beam_size,
-            word_timestamps=True, vad_filter=False, condition_on_previous_text=False)
+            audio, **options)
         words, parts = [], []
         for segment in segments:
             parts.append(segment.text.strip())
@@ -82,12 +95,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, b"not found", "text/plain; charset=utf-8")
 
     def do_POST(self):
-        if self.path not in ("/transcribe", "/transcribe-json"):
+        if self.path not in ("/transcribe", TRANSCRIBE_JSON, TRANSCRIBE_JSON_VAD):
             self._send(404, b"not found", "text/plain; charset=utf-8")
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            text, words = transcribe(self.rfile.read(length))
+            text, words = transcribe(self.rfile.read(length), vad_filter=self.path == TRANSCRIBE_JSON_VAD)
             if self.path == "/transcribe":
                 self._send(200, text.encode("utf-8"), "text/plain; charset=utf-8")
             else:

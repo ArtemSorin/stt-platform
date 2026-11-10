@@ -12,7 +12,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 
 /**
- * HTTP-клиент Python-сервера Whisper ({@code /transcribe}, {@code /transcribe-json}).
+ * HTTP-клиент Python-сервера Whisper ({@code /transcribe}, {@code /transcribe-json},
+ * {@code /transcribe-json-vad}).
  *
  * @version 1.0.0
  */
@@ -79,7 +80,7 @@ public class WhisperClient {
     /**
      * Отправляет сырой PCM 16 кГц / 16 бит / моно на указанный путь Whisper-сервера.
      *
-     * @param path {@code /transcribe} или {@code /transcribe-json}
+     * @param path путь транскрипции, включая итоговый вариант с VAD
      * @param pcm байты PCM без WAV-заголовка
      * @return статус и тело ответа
      * @throws IOException при сетевой ошибке

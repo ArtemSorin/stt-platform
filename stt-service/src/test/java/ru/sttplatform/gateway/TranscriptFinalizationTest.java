@@ -105,7 +105,7 @@ class TranscriptFinalizationTest {
         if (timingFileBlocked) Files.createDirectory(timingPath);
         WhisperClient client = mock(WhisperClient.class);
         AtomicInteger calls = new AtomicInteger();
-        when(client.post(eq("/transcribe-json"), any(byte[].class))).thenAnswer(call -> {
+        when(client.post(eq("/transcribe-json-vad"), any(byte[].class))).thenAnswer(call -> {
             int attempt = calls.getAndIncrement();
             if (attempt == 0) return new WhisperClient.Reply(503, "temporary error");
             String word = attempt == 1 ? "система" : "микрофон";
@@ -126,7 +126,7 @@ class TranscriptFinalizationTest {
             ReflectionTestUtils.setField(orchestrator, "timelineLog", new BufferedWriter(new StringWriter()));
 
             ReflectionTestUtils.invokeMethod(orchestrator, "postprocessWhisper");
-            verify(client, times(3)).post(eq("/transcribe-json"), any(byte[].class));
+            verify(client, times(3)).post(eq("/transcribe-json-vad"), any(byte[].class));
             if (!timingFileBlocked) {
                 var progress = Json.MAPPER.readTree(timingPath.toFile());
                 assertEquals("processing", progress.path("status").asText());

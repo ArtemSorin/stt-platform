@@ -98,7 +98,7 @@ class WhisperAcknowledgementTest {
     @Test void finalPassUsesBothChannelsAndExcludesLiveAndVoskWords() throws Exception {
         Orchestrator orchestrator = mock(Orchestrator.class, CALLS_REAL_METHODS);
         WhisperClient client = mock(WhisperClient.class);
-        when(client.post(eq("/transcribe-json"), any(byte[].class))).thenAnswer(call -> {
+        when(client.post(anyString(), any(byte[].class))).thenAnswer(call -> {
             byte[] pcm = call.getArgument(1);
             String text = pcm[0] == 1 ? "кандидат" : "интервьюер";
             return new WhisperClient.Reply(200, "{\"words\":[{\"word\":\"" + text + "\",\"start\":0.1,\"end\":0.5}]}");
@@ -125,7 +125,7 @@ class WhisperAcknowledgementTest {
     @Test void finalPassUsesMarkedVoskOnlyForTheFailedChannel() throws Exception {
         Orchestrator orchestrator = mock(Orchestrator.class, CALLS_REAL_METHODS);
         WhisperClient client = mock(WhisperClient.class);
-        when(client.post(eq("/transcribe-json"), any(byte[].class))).thenAnswer(call -> {
+        when(client.post(anyString(), any(byte[].class))).thenAnswer(call -> {
             byte[] pcm = call.getArgument(1);
             return pcm[0] == 1 ? new WhisperClient.Reply(503, "unavailable")
                     : new WhisperClient.Reply(200, "{\"words\":[{\"word\":\"вопрос\",\"start\":0.1,\"end\":0.5}]}");
@@ -159,7 +159,7 @@ class WhisperAcknowledgementTest {
     @Test void marksUnrecognizedAudioWhenNeitherWhisperNorVoskHasWords() throws Exception {
         Orchestrator orchestrator = mock(Orchestrator.class, CALLS_REAL_METHODS);
         WhisperClient client = mock(WhisperClient.class);
-        when(client.post(eq("/transcribe-json"), any(byte[].class))).thenReturn(new WhisperClient.Reply(503, "unavailable"));
+        when(client.post(anyString(), any(byte[].class))).thenReturn(new WhisperClient.Reply(503, "unavailable"));
         try (var source = new InterviewAudioSpool(directory, "session", true)) {
             source.append(0, new byte[32_000], new byte[32_000]); source.seal(16_000);
             set(orchestrator, "audioSpool", source);

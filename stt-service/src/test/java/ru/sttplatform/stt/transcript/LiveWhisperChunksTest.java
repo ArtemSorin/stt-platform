@@ -13,7 +13,7 @@ class LiveWhisperChunksTest {
     @Test void dispatchesAtThirtySecondsAndReusesResultsAfterRetraction() throws Exception {
         WhisperClient client = mock(WhisperClient.class);
         AtomicInteger calls = new AtomicInteger();
-        when(client.post(anyString(), any(byte[].class))).thenAnswer(call -> {
+        when(client.post(eq("/transcribe-json"), any(byte[].class))).thenAnswer(call -> {
             calls.incrementAndGet();
             return new WhisperClient.Reply(200, "{\"words\":[{\"word\":\"да\",\"start\":0,\"end\":0.1}]}");
         });
@@ -30,5 +30,6 @@ class LiveWhisperChunksTest {
         assertSame(firstDecision.get(0), continued.get(0));
         assertEquals(3, calls.get());
         assertEquals(31 * 16_000L, continued.get(2).get().offset());
+        verify(client, times(3)).post(eq("/transcribe-json"), any(byte[].class));
     }
 }
