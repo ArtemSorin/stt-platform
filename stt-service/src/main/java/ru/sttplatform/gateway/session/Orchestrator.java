@@ -153,6 +153,7 @@ public final class Orchestrator implements AutoCloseable {
     private final Map<Integer, CompletableFuture<Void>> whisperCompletion = new ConcurrentHashMap<>();
     private final Map<Integer, List<SampleRange>> acceptedWhisperRanges = new HashMap<>();
     private boolean postprocessStarted;
+    private TranscriptTiming transcriptTiming;
     private volatile List<Map<String, Object>> fullTranscriptWords;
     private volatile String transcriptError;
     private volatile int transcriptChunksDone, transcriptChunksTotal;
@@ -1509,6 +1510,8 @@ public final class Orchestrator implements AutoCloseable {
     }
 
     private void postprocessWhisper() throws java.io.IOException, InterruptedException {
+        try { transcriptTiming = new TranscriptTiming(directory, sessionId, separateChannels, testMode); }
+        catch (Exception error) { log.warn("Не удалось подготовить замеры транскрипции: {}", error.toString()); }
         List<PostInterviewWhisper.SpeechEvidence> evidence = new ArrayList<>();
         List<FinalTranscriptBuilder.SpeakerSpan> roles = new ArrayList<>();
         synchronized (this) {
@@ -1527,7 +1530,12 @@ public final class Orchestrator implements AutoCloseable {
             }
         }
         PostInterviewWhisper.Result result = new PostInterviewWhisper(audioSpool).transcribe(evidence, whisperClient,
-                (done, total) -> { transcriptChunksDone = done; transcriptChunksTotal = total; });
+                (done, total) -> {
+                    transcriptChunksDone = done;
+                    transcriptChunksTotal = total;
+                    try { if (transcriptTiming != null) transcriptTiming.progress(done); }
+                    catch (Exception error) { log.warn("Не удалось измерить время канала: {}", error.toString()); }
+                });
         List<Map<String, Object>> rows = new FinalTranscriptBuilder().build(audioSpool, result.words(), roles, testMode);
         for (PostInterviewWhisper.Gap gap : result.gaps()) {
             List<PostInterviewWhisper.Word> reserve = new ArrayList<>();
@@ -1778,6 +1786,12 @@ public final class Orchestrator implements AutoCloseable {
 
     /** @return использовался ли резервный текст или остался нераспознанный участок */
     public boolean transcriptFallback() { return transcriptFallback; }
+
+    void finishTranscriptTiming(boolean ready) {
+        if (transcriptTiming == null) return;
+        try { transcriptTiming.finish(ready); }
+        catch (Exception error) { log.warn("Не удалось измерить общее время транскрипции: {}", error.toString()); }
+    }
 
     /** Отмечает потерю исходного канала, не останавливая подсказки.
      * @param reason описание потери */
