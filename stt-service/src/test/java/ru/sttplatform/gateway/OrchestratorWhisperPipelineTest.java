@@ -36,7 +36,7 @@ import static ru.sttplatform.testsupport.MiniWsServer.await;
 class OrchestratorWhisperPipelineTest {
 
     /** Предел текстового сообщения во внутреннем канале аналитики (WebSocketConfig.setMaxTextMessageBufferSize). */
-    static final int ANALYTICS_MAX_TEXT_BYTES = 8 * 1024;
+    static final int ANALYTICS_MAX_TEXT_BYTES = 32 * 1024;
 
     @TempDir Path dir;
     MiniWsServer stt, analytics;
