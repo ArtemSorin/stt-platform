@@ -106,6 +106,45 @@ class InterviewWebSocketHandlerTest {
     // ---------------------------------------------------------------- старт
 
     @Test
+    void deferred_finalization_acknowledges_live_end_before_report() throws Exception {
+        start("deferredFinalReport", true);
+        ready(0);
+        speakAndPause(ANSWER, 40, 45, 0);
+        assertNotNull(ws.last("decision"));
+        assertNull(ws.last("report"));
+        send(event("prepare_final", "audioEndSample", 68000));
+        assertNotNull(ws.last("finalization_ready"));
+        assertNull(ws.last("report"));
+        int answerId = ws.last("decision").path("answerId").asInt();
+        send(event("final_answer", "answerId", answerId, "questionId", "legacy-1", "text", "Финальный ответ", "source", "whisper", "transcriptIncomplete", true));
+        send(event("stop", "audioEndSample", 68000));
+        assertNotNull(ws.last("report"));
+        assertTrue(ws.last("report").path("scoringIncomplete").asBoolean());
+        assertTrue(ws.last("report").path("transcriptIncomplete").asBoolean());
+        assertNull(ws.closedWith);
+    }
+
+    @Test
+    void deferred_finalization_commits_an_unfinished_answer_before_acknowledgement() throws Exception {
+        start("deferredFinalReport", true);
+        ready(0);
+        speakAndPause(ANSWER, 15, 0, 0);
+        assertNull(ws.last("decision"));
+        send(event("prepare_final", "audioEndSample", 12000));
+        assertNotNull(ws.last("decision"));
+        assertNotNull(ws.last("finalization_ready"));
+        assertNull(ws.last("report"));
+    }
+
+    @Test
+    void empty_interview_reports_vosk_fallback_source() throws Exception {
+        start("deferredFinalReport", true);
+        send(event("prepare_final", "audioEndSample", 0));
+        send(event("stop", "audioEndSample", 0, "transcriptSource", "vosk"));
+        assertEquals("vosk_fallback", ws.last("report").path("transcriptSource").asText());
+    }
+
+    @Test
     void start_creates_the_interview_announces_status_and_the_first_question() throws Exception {
         start();
         JsonNode status = ws.last("service_status");

@@ -25,6 +25,9 @@ interview:
   report-download: true        # в отчёте есть эталонные ответы! false — не отдавать файл по HTTP
   # Подмена банка вопросов / словаря внешними файлами (иначе — встроенные из resources/interview):
   # questions-path: ./analytics-service/demo/questions-six.tsv
+  # Новый формат: укажите оба файла с вопросами и уточнениями.
+  # questions-path: ./analytics-service/demo/catalog-questions.tsv
+  # followups-path: ./analytics-service/demo/catalog-followups.tsv
   # glossary-path: D:/data/glossary.txt
 
   # ---- Смысловая оценка ответов моделью FRIDA-Decisions (judge/frida_server.py) ----
@@ -51,7 +54,7 @@ interview:
     process:                       # автозапуск сервера модели вместе с сервисом
       autostart: ${JUDGE_AUTOSTART:false}
       python: ${JUDGE_PYTHON:python}
-      script: judge/frida_server.py
+      script: ${JUDGE_SCRIPT:judge/frida_server.py}
       backend: ${JUDGE_BACKEND:torch}   # torch | onnx | heuristic | fake (тестовые заглушки)
       model: ${JUDGE_MODEL:ai-forever/FRIDA-Decisions}
       device: ${JUDGE_DEVICE:}          # cuda | cpu; пусто — автоматически

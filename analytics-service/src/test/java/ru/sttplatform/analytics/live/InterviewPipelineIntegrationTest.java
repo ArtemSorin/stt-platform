@@ -42,7 +42,7 @@ class InterviewPipelineIntegrationTest {
         });
         server.start();
         return new FridaJudge(new JudgeProperties(true, "http://127.0.0.1:" + server.getAddress().getPort(), "sidecar", null,
-                2000, 5000, 1200, 1800, true, 3, 400, 16, null, null, null, null, null, null));
+                2000, 5000, 1200, 1800, true, 3, 5000, 16, null, null, null, null, null, null));
     }
 
     /** Кадры в «реальном» темпе 2 мс/кадр, чтобы HTTP-ответ успевал прийти между кадрами. */
@@ -98,12 +98,13 @@ class InterviewPipelineIntegrationTest {
         }
         // после серии сбоев автомат отказов выключает модель — новые запросы не уходят
         assertFalse(judge.ready());
-        int sent = requests.get();
+        // HTTP-сервер может получить ранее отправленный запрос после проверки ready().
+        long sent = ((Number) judge.stats().get("calls")).longValue();
         sim.ready();
         sim.silence(200);
         sim.speak(STRONG, 40);
         silencePaced(sim, 6000, "decision");
-        assertEquals(sent, requests.get());
+        assertEquals(sent, ((Number) judge.stats().get("calls")).longValue());
     }
 
     @Test

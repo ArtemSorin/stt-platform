@@ -5,6 +5,7 @@ import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import ru.sttplatform.common.json.Json;
 import ru.sttplatform.gateway.clients.ApiException;
@@ -14,7 +15,6 @@ import ru.sttplatform.diarization.session.SessionException;
 import ru.sttplatform.diarization.session.SessionRegistry;
 import ru.sttplatform.stt.whisper.WhisperClient;
 import ru.sttplatform.stt.transcript.TranscriptStore;
-import ru.sttplatform.stt.vosk.SpeechSessionFactory;
 import ru.sttplatform.stt.integration.IntegrationProperties;
 
 import java.nio.file.Path;
@@ -60,9 +60,10 @@ public class SessionManager {
     private final SessionRegistry diarizationSessions;
     private final GatewayProperties props;
     private final TranscriptStore transcriptStore;
-    private final SpeechSessionFactory speechSessions;
     private final IntegrationProperties integrationProps;
     private volatile Active current;
+    // Все пользовательские интервью завершают обработку до запуска итогового распознавания.
+    private final boolean deferredFinalReport = true;
 
     /**
      * Создаёт менеджер.
@@ -70,15 +71,13 @@ public class SessionManager {
      * @param diarizationSessions реестр локальных сессий диаризации
      * @param props адреса сервисов и каталог результатов
      * @param whisper клиент локального Whisper helper
-     * @param speechSessions фабрика Vosk-распознавателей
      * @param integrationProps настройки аудиопотока
      */
     public SessionManager(SessionRegistry diarizationSessions, GatewayProperties props, WhisperClient whisper,
-                          SpeechSessionFactory speechSessions, IntegrationProperties integrationProps) {
+                          IntegrationProperties integrationProps) {
         this.diarizationSessions = diarizationSessions;
         this.props = props;
         this.transcriptStore = new TranscriptStore(props);
-        this.speechSessions = speechSessions;
         this.integrationProps = integrationProps;
         this.whisperClient = whisper;
     }
@@ -126,8 +125,8 @@ public class SessionManager {
         try {
             test.orchestrator = new Orchestrator(Path.of(props.outputDir()).toAbsolutePath().normalize()
                     .resolve(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + "-test-" + test.id.substring(0, 8)),
-                    props.sttUrl(), props.analyticsUrl(), test.id, whisperEnabled && whisperClient.configured(), speechSessions,
-                    integrationProps, whisperClient, true, candidate, false, Path.of(props.audioSpoolDir()));
+                    props.sttUrl(), props.analyticsUrl(), test.id, whisperEnabled && whisperClient.configured(),
+                    integrationProps, whisperClient, true, candidate, false, Path.of(props.audioSpoolDir()), deferredFinalReport);
             test.phase = "live";
             current = test;
             return status(test.id);
@@ -183,8 +182,8 @@ public class SessionManager {
         try {
             a.orchestrator = new Orchestrator(Path.of(props.outputDir()).toAbsolutePath().normalize()
                     .resolve(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + "-" + a.id.substring(0, 8)),
-                    props.sttUrl(), props.analyticsUrl(), a.id, whisperClient.configured(), speechSessions, integrationProps,
-                    whisperClient, false, "", "channels".equals(audioMode), Path.of(props.audioSpoolDir()));
+                    props.sttUrl(), props.analyticsUrl(), a.id, whisperClient.configured(), integrationProps,
+                    whisperClient, false, "", "channels".equals(audioMode), Path.of(props.audioSpoolDir()), deferredFinalReport);
             a.audioMode = audioMode;
             session.setListener(event -> onDiarizationEvent(a, Json.MAPPER.valueToTree(event)));
         } catch (RuntimeException | java.io.IOException failure) {

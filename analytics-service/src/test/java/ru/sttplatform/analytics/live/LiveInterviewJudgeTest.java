@@ -19,6 +19,8 @@ class LiveInterviewJudgeTest {
         final List<CompletableFuture<Verdict>> decisions = new ArrayList<>();
         final List<CompletableFuture<Verdict>> scorings = new ArrayList<>();
         final List<JudgeInput> decisionInputs = new ArrayList<>();
+        final List<JudgeInput> scoreInputs = new ArrayList<>();
+        Verdict immediateScoring;
         final AtomicInteger previews = new AtomicInteger();
         boolean ready = true;
         Verdict immediate;
@@ -36,7 +38,8 @@ class LiveInterviewJudgeTest {
         }
 
         @Override public CompletableFuture<Verdict> score(JudgeInput input) {
-            CompletableFuture<Verdict> f = new CompletableFuture<>();
+            scoreInputs.add(input);
+            CompletableFuture<Verdict> f = immediateScoring == null ? new CompletableFuture<>() : CompletableFuture.completedFuture(immediateScoring);
             scorings.add(f);
             return f;
         }
@@ -90,6 +93,70 @@ class LiveInterviewJudgeTest {
     }
 
     private static final String ANSWER = "джава это виртуальная машина она запускает программы а джи ди кей это для разработки там компилятор";
+
+    @Test
+    void deferred_report_scores_updated_text_only_after_stop() {
+        Run r = new Run(ANSWER, 40, 5000);
+        r.live.setDeferredFinalReport(true);
+        r.judge.immediate = verdict(0.95);
+        r.judge.immediateScoring = verdict(0.9);
+        r.live.start();
+        r.speak(40);
+        assertTrue(r.silenceUntilDecision(100) > 0);
+        int answerId = (Integer) r.last("decision").get("answerId");
+        assertTrue(r.judge.scoreInputs.isEmpty());
+        assertThrows(IllegalStateException.class, () ->
+                r.live.onFinalAnswer(answerId, "legacy-1", null, "Рано", "whisper"));
+        r.live.onPrepareFinal();
+        assertThrows(IllegalArgumentException.class, () ->
+                r.live.onFinalAnswer(answerId, "legacy-2", null, "Чужой ответ", "whisper"));
+        r.live.onFinalAnswer(answerId, "legacy-1", null, "Точный финальный ответ", "whisper");
+        assertThrows(IllegalStateException.class, () -> r.live.onRefined(answerId, "устаревший ответ"));
+        assertThrows(IllegalArgumentException.class, () ->
+                r.live.onFinalAnswer(answerId, "legacy-1", null, "Дубликат", "whisper"));
+        assertTrue(r.judge.scoreInputs.isEmpty());
+        assertNull(r.last("report"));
+        r.live.onStop();
+        assertEquals(1, r.judge.scoreInputs.size());
+        assertEquals("Точный финальный ответ", r.judge.scoreInputs.get(0).turns().get(0).answer());
+        assertNotNull(r.last("report"));
+    }
+
+    @Test
+    void deferred_report_does_not_score_a_skipped_answer() {
+        Run r = new Run("", 0, 5000);
+        r.live.setDeferredFinalReport(true);
+        r.live.start();
+        r.live.onSkip();
+        int answerId = (Integer) r.last("decision").get("answerId");
+        r.live.onPrepareFinal();
+        r.live.onFinalAnswer(answerId, "legacy-1", null, "", "whisper");
+        r.live.onStop();
+        assertTrue(r.judge.scoreInputs.isEmpty());
+        assertNotNull(r.last("report"));
+        assertEquals(false, r.last("report").get("scoringIncomplete"));
+    }
+
+    @Test
+    void late_final_scoring_does_not_change_report_after_timeout() {
+        Run r = new Run(ANSWER, 40, 5000);
+        r.live.setDeferredFinalReport(true);
+        r.live.setRefinementWait(10);
+        r.judge.immediate = verdict(0.95);
+        r.live.start();
+        r.speak(40);
+        assertTrue(r.silenceUntilDecision(100) > 0);
+        int answerId = (Integer) r.last("decision").get("answerId");
+        r.live.onPrepareFinal();
+        r.live.onFinalAnswer(answerId, "legacy-1", null, "Финальная транскрипция", "whisper");
+        r.live.onStop();
+        assertEquals(true, r.last("report").get("scoringIncomplete"));
+        var session = (InterviewSession) org.springframework.test.util.ReflectionTestUtils.getField(r.live, "interview");
+        var before = session.report();
+        assertEquals(1, r.judge.scorings.size());
+        r.judge.scorings.get(0).complete(verdict(0.95));
+        assertEquals(before, session.report());
+    }
 
     @Test
     void decision_waits_for_the_model_and_uses_its_verdict() {

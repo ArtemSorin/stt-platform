@@ -29,10 +29,12 @@ public final class InterviewSession {
      * @param text текст вопроса
      * @param followUp является ли вопрос уточняющим
      * @param followUpNumber номер уточнения
+     * @param stableQuestionId постоянный ID основного вопроса
+     * @param followUpId постоянный ID уточнения или null
      * @version 1.0.0
      */
     public record Prompt(int questionId, int number, int total, String level, String topic, String text,
-                         boolean followUp, int followUpNumber) {}
+                         boolean followUp, int followUpNumber, String stableQuestionId, String followUpId) {}
 
     /**
      * Содержит решение по ответу и следующий вопрос.
@@ -54,6 +56,7 @@ public final class InterviewSession {
      */
     static final class Attempt {
         final String promptText;
+        int followUpIndex = -1;
         String text = "";
         AnswerTiming timing = new AnswerTiming(0, 0);
         AnswerAnalysis analysis;
@@ -65,6 +68,7 @@ public final class InterviewSession {
         java.time.Instant answeredAt;
         Verdict verdict;   // быстрая оценка модели, по которой принято решение
         Verdict scoring;   // фоновая оценка по критериям для отчёта (по самому точному тексту)
+        Verdict followUpScoring;
 
         Attempt(String promptText) {
             this.promptText = promptText;
@@ -127,8 +131,16 @@ public final class InterviewSession {
         for (CompiledQuestion cq : kb.questions()) {
             if (levels == null || levels.isEmpty() || levels.contains(cq.level())) plan.add(cq);
         }
-        plan.sort(Comparator.comparingInt(cq -> cq.level().ordinal())); // стабильная сортировка
+        // Новый каталог уже упорядочен явным полем order. Старый TSV сохраняет прежнее поведение.
+        if (plan.stream().allMatch(cq -> !cq.question().explicitOrder()))
+            plan.sort(Comparator.comparingInt(cq -> cq.level().ordinal()));
         if (plan.isEmpty()) throw new IllegalArgumentException("Нет вопросов для выбранных уровней");
+    }
+
+    /** Снимок сценария выбранных вопросов в порядке этого интервью.
+     * @return неизменяемый список вопросов */
+    public synchronized List<Question> scenarioQuestions() {
+        return plan.stream().map(CompiledQuestion::question).toList();
     }
 
     /**
@@ -198,9 +210,12 @@ public final class InterviewSession {
             int idx = d.followUpIndex();
             run.followUpAsked[idx] = true;
             run.followUpsUsed++;
-            run.attempts.add(new Attempt(run.cq.followUps()[idx].text()));
+            Attempt followUpAttempt = new Attempt(run.cq.followUps()[idx].text());
+            followUpAttempt.followUpIndex = idx;
+            run.attempts.add(followUpAttempt);
             Prompt p = new Prompt(run.cq.id(), pos + 1, plan.size(), run.cq.level().title,
-                    run.cq.question().topic(), run.cq.followUps()[idx].text(), true, run.followUpsUsed);
+                    run.cq.question().topic(), run.cq.followUps()[idx].text(), true, run.followUpsUsed,
+                    run.cq.question().stableId(), followUpId(run.cq.question(), idx));
             return new Step(Action.ASK_FOLLOW_UP, d.reason(), p, a, a.coverage(), engine(v), v);
         }
         pos++;
@@ -349,7 +364,7 @@ public final class InterviewSession {
         int idx = run.attempts.indexOf(att);
         if (idx <= 0) return prompt(run, false, 0);
         return new Prompt(run.cq.id(), pos + 1, plan.size(), run.cq.level().title, run.cq.question().topic(),
-                att.promptText, true, idx);
+                att.promptText, true, idx, run.cq.question().stableId(), followUpId(run.cq.question(), att.followUpIndex));
     }
 
     /** Ссылка на конкретный ответ — чтобы точный текст можно было подменить позже, в том числе из другого потока.
@@ -407,6 +422,83 @@ public final class InterviewSession {
         Question q = run.cq.question();
         return new JudgeInput(run.cq.level().title, q.topic(), q.text(), q.reference(), q.notes(),
                 Facts.split(q.reference()), turns, options);
+    }
+
+    /** Проверяет, есть ли фактический текст для оценки.
+     * @param ref ссылка на попытку
+     * @return есть ли непустой текст ответа */
+    public synchronized boolean hasAnswerText(AttemptRef ref) {
+        return ref != null && ref.attempt.answered && ref.attempt.display != null
+                && !ref.attempt.display.isBlank();
+    }
+
+    /** Строит вход для отдельной оценки уточнения с его собственным эталоном.
+     * @param ref ссылка на попытку
+     * @return вход модели или null для основного вопроса и отсутствующего эталона */
+    public synchronized JudgeInput followUpJudgeInput(AttemptRef ref) {
+        if (ref == null || ref.attempt.followUpIndex < 0) return null;
+        Question q = ref.run.cq.question();
+        if (q.followUpDetails().isEmpty()) return null;
+        var detail = q.followUpDetails().get(ref.attempt.followUpIndex);
+        if (detail.reference().isBlank()) return null;
+        String answer = ref.attempt.display == null ? "" : ref.attempt.display;
+        return new JudgeInput(q.level().title, q.topic(), detail.text(), detail.reference(), detail.notes(),
+                Facts.split(detail.reference()), List.of(new JudgeInput.Turn(detail.text(), answer)), List.of());
+    }
+
+    /** Проверяет, отсутствует ли эталон у заданного уточнения.
+     * @param ref ссылка на попытку
+     * @return true, если уточнение нельзя оценить отдельно */
+    public synchronized boolean missingFollowUpReference(AttemptRef ref) {
+        if (ref == null || ref.attempt.followUpIndex < 0) return false;
+        var details = ref.run.cq.question().followUpDetails();
+        return details.isEmpty() || details.get(ref.attempt.followUpIndex).reference().isBlank();
+    }
+
+    /** Сохраняет оценку отдельного уточнения для детального отчёта.
+     * @param ref ссылка на попытку
+     * @param verdict результат модели */
+    public synchronized void applyFollowUpScoring(AttemptRef ref, Verdict verdict) {
+        if (ref != null) ref.attempt.followUpScoring = verdict;
+    }
+
+    /** Проверяет соответствие ответа фактически заданному вопросу и уточнению.
+     * @param ref ссылка на попытку
+     * @param questionId постоянный ID вопроса
+     * @param followUpId ID уточнения или null
+     * @return соответствует ли ответ указанным ID */
+    public synchronized boolean matchesAnswer(AttemptRef ref, String questionId, String followUpId) {
+        if (ref == null || !ref.run.cq.question().stableId().equals(questionId)) return false;
+        String expected = followUpId(ref.run.cq.question(), ref.attempt.followUpIndex);
+        return java.util.Objects.equals(expected, followUpId);
+    }
+
+    /** Заменяет live-текст итоговым, включая подтверждённый пустой результат.
+     * @param ref ссылка на попытку
+     * @param text нормализованный текст
+     * @param display текст для отображения
+     * @param whisper получен ли текст из итогового Whisper
+     * @throws IllegalArgumentException если входные данные отсутствуют */
+    public synchronized void replaceFinalAnswer(AttemptRef ref, String text, String display, boolean whisper) {
+        if (ref == null || text == null || display == null) throw new IllegalArgumentException("Нет итогового ответа");
+        ref.attempt.text = text;
+        ref.attempt.display = display;
+        ref.attempt.rank = whisper ? 2 : 1;
+        ref.attempt.verdict = null;
+        ref.attempt.scoring = null;
+        ref.run.recompute(analyzer);
+    }
+
+    /** Удаляет предварительные вердикты, чтобы итог не зависел от live-текста. */
+    public synchronized void clearRealtimeVerdicts() {
+        for (QuestionRun run : runs) {
+            for (Attempt attempt : run.attempts) {
+                attempt.verdict = null;
+                attempt.scoring = null;
+                attempt.followUpScoring = null;
+            }
+            run.recompute(analyzer);
+        }
     }
 
     /**
@@ -549,7 +641,7 @@ public final class InterviewSession {
                 attempts.add(new InterviewDetails.AttemptDetail(isFu, isFu ? fu : 0, a.promptText,
                         a.display == null || a.display.isBlank() ? a.text : a.display, a.answered, src, w,
                         t.latencyMs(), t.speechMs(), wpm, sp, a.analysis == null ? 0 : a.analysis.coverage(),
-                        a.action, a.reason, a.answeredAt));
+                        a.action, a.reason, a.answeredAt, a.followUpScoring));
             }
             out.add(new InterviewDetails.QuestionDetail(number, cq.level().title, cq.question().topic(),
                     cq.question().text(), cq.question().reference(), cq.question().notes(), fus, attempts, concepts,
@@ -600,6 +692,11 @@ public final class InterviewSession {
 
     private Prompt prompt(QuestionRun r, boolean followUp, int n) {
         return new Prompt(r.cq.id(), pos + 1, plan.size(), r.cq.level().title, r.cq.question().topic(),
-                r.cq.question().text(), followUp, n);
+                r.cq.question().text(), followUp, n, r.cq.question().stableId(), null);
+    }
+
+    private static String followUpId(Question question, int index) {
+        if (index < 0 || index >= question.followUps().size()) return null;
+        return question.followUpDetails().isEmpty() ? null : question.followUpDetails().get(index).id();
     }
 }

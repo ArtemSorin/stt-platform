@@ -9,8 +9,6 @@ import org.junit.jupiter.api.io.TempDir;
 import ru.sttplatform.common.json.Json;
 import ru.sttplatform.gateway.session.Orchestrator;
 import ru.sttplatform.stt.integration.IntegrationProperties;
-import ru.sttplatform.stt.vosk.SpeechSession;
-import ru.sttplatform.stt.vosk.SpeechSessionFactory;
 import ru.sttplatform.stt.whisper.WhisperClient;
 import ru.sttplatform.testsupport.MiniWsServer;
 
@@ -54,17 +52,13 @@ class OrchestratorWhisperPipelineTest {
         analytics = new MiniWsServer();
         analytics.onText = (conn, text) -> {
             try {
-                received.add(Json.MAPPER.readTree(text));
+                JsonNode event = Json.MAPPER.readTree(text);
                 receivedBytes.add(text.getBytes(StandardCharsets.UTF_8).length);
+                received.add(event);
             } catch (Exception e) { throw new IllegalStateException(e); }
         };
-        SpeechSession speech = mock(SpeechSession.class);
-        when(speech.accept(any(), anyInt())).thenReturn(null);
-        when(speech.finish()).thenReturn(new SpeechSession.Event("final", ""));
-        SpeechSessionFactory factory = mock(SpeechSessionFactory.class);
-        when(factory.create()).thenReturn(speech);
         whisper = mock(WhisperClient.class);
-        orchestrator = new Orchestrator(dir.resolve("out"), stt.httpUrl(), analytics.httpUrl(), "w1", true, factory,
+        orchestrator = new Orchestrator(dir.resolve("out"), stt.httpUrl(), analytics.httpUrl(), "w1", true,
                 new IntegrationProperties(null, null), whisper, true, "Иван", false, dir.resolve("spool"));
     }
 

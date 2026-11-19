@@ -98,7 +98,10 @@ class InterviewWebLayerTest {
         var config = new InterviewConfig();
         var defaults = new InterviewProperties(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         InterviewKnowledge bundled = config.interviewKnowledge(defaults);
-        assertTrue(bundled.questions().length > 10);
+        assertEquals(50, bundled.questions().length);
+        assertEquals("Q001", bundled.questions()[0].question().stableId());
+        assertEquals("Q001-F01", bundled.questions()[0].question().followUpDetails().get(0).id());
+        assertFalse(bundled.questions()[0].question().followUpDetails().get(0).reference().isBlank());
 
         Path questions = dir.resolve("q.tsv");
         Files.writeString(questions, "Стажёр\tJava\tЧто такое JVM?\tВиртуальная машина Java\t\t\n", StandardCharsets.UTF_8);

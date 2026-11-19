@@ -122,6 +122,15 @@ public final class LiveInterview {
     private long ttsEndMs;               // когда закончилась озвучка вопроса (режим «в наушниках»): это время не считается раздумьем
     private volatile int answerVersion;   // растёт при откате: устаревшие результаты Whisper игнорируются
     private int answerId;
+    private boolean deferredFinalReport;
+    private boolean finalReportRequested;
+    private boolean finalizationPrepared;
+    private boolean finalUsesVosk;
+    private boolean finalUsesMixed;
+    private volatile boolean finalScoringIncomplete;
+    private boolean finalTranscriptIncomplete;
+    private boolean finalReferencesMissing;
+    private final Set<Integer> finalAnswerIds = ConcurrentHashMap.newKeySet();
     private boolean finished;
 
     // контроль «успевает ли распознавание за речью»
@@ -186,6 +195,10 @@ public final class LiveInterview {
         this.awaitExternalRefinement = waitMs > 0;
     }
 
+    /** Откладывает построение отчёта до команды окончания итоговой обработки.
+     * @param enabled включить отложенный отчёт */
+    public void setDeferredFinalReport(boolean enabled) { this.deferredFinalReport = enabled; }
+
     /** Настраивает место сохранения отчёта и сведения о кандидате.
      * @param exporter средство экспорта отчёта
      * @param candidate имя кандидата для отчёта
@@ -202,6 +215,33 @@ public final class LiveInterview {
      */
     public void start() {
         startedAt = java.time.Instant.now();
+        if (deferredFinalReport) {
+            out.send(Map.of("type", "scenario_rubric", "criteria",
+                    ru.sttplatform.analytics.judge.FridaPromptBuilder.scoringRubric()));
+            int order = 0;
+            for (var q : interview.scenarioQuestions()) {
+                Map<String, Object> snapshot = new LinkedHashMap<>();
+                snapshot.put("type", "scenario_question");
+                snapshot.put("questionId", q.stableId());
+                snapshot.put("order", ++order);
+                snapshot.put("level", q.level().title);
+                snapshot.put("topic", q.topic());
+                snapshot.put("text", q.text());
+                snapshot.put("reference", q.reference());
+                snapshot.put("notes", q.notes());
+                out.send(snapshot);
+                for (int i = 0; i < q.followUps().size(); i++) {
+                    Map<String, Object> followUp = new LinkedHashMap<>();
+                    followUp.put("type", "scenario_followup");
+                    followUp.put("questionId", q.stableId());
+                    followUp.put("followUpId", q.followUpDetails().isEmpty() ? null : q.followUpDetails().get(i).id());
+                    followUp.put("text", q.followUps().get(i));
+                    followUp.put("reference", q.followUpDetails().isEmpty() ? null : q.followUpDetails().get(i).reference());
+                    followUp.put("notes", q.followUpDetails().isEmpty() ? null : q.followUpDetails().get(i).notes());
+                    out.send(followUp);
+                }
+            }
+        }
         out.send(question(interview.start(), 0));
     }
 
@@ -290,8 +330,9 @@ public final class LiveInterview {
         advance(st);
     }
 
-    /** Передаёт уже распознанный кадр; аналитика не получает PCM-аудио.
-     * @param type тип события Vosk: {@code partial} или {@code final}
+    /** Передаёт уже собранный текст и состояние VAD; аналитика не получает PCM-аудио.
+     * @param type {@code snapshot} для текста единственного Vosk после фильтрации роли,
+     *             {@code partial}/{@code final} — для совместимости со старым протоколом
      * @param text распознанный текст
      * @param samples число сэмплов обработанного аудио
      * @param rms среднеквадратичная энергия кадра
@@ -307,7 +348,14 @@ public final class LiveInterview {
                            long speechDurationMs, long silenceMs) {
         if (finished || phase == Phase.IDLE || phase == Phase.WAIT_READY) return;
         SpeechEngine.Result result = null;
-        if ("partial".equals(type) || "final".equals(type)) {
+        if ("snapshot".equals(type)) {
+            // STT передаёт заново собранный текст единственного Vosk после назначения ролей.
+            committed.setLength(0);
+            if (text != null && !text.isBlank()) committed.append(text);
+            partial = "";
+            refreshCurrent();
+            send("partial", "text", currentDisplay);
+        } else if ("partial".equals(type) || "final".equals(type)) {
             result = new SpeechEngine.Result("final".equals(type), text == null ? "" : text);
             foldResults(List.of(result));
             send("partial", "text", currentDisplay);
@@ -345,8 +393,89 @@ public final class LiveInterview {
 
     /** Кнопка «Завершить»: отчёт по уже отвеченным вопросам. */
     public void onStop() {
-        if (finished) return;
-        finishInterview();
+        if (!deferredFinalReport) {
+            if (!finished) finishInterview();
+            return;
+        }
+        if (finalReportRequested) return;
+        if (!finalizationPrepared) throw new IllegalStateException("Финализация интервью не подготовлена");
+        if (!finalAnswerIds.containsAll(answerRefs.keySet()))
+            throw new IllegalStateException("Получены не все итоговые ответы");
+        finished = true;
+        phase = Phase.IDLE;
+        finalReportRequested = true;
+        interview.clearRealtimeVerdicts();
+        for (var entry : answerRefs.entrySet()) {
+            if (!interview.hasAnswerText(entry.getValue())) continue;
+            startScoring(entry.getValue(), entry.getKey());
+            startFollowUpScoring(entry.getValue(), entry.getKey());
+        }
+        sendReport();
+    }
+
+    /** Фиксирует источник финализации даже если в интервью нет ответов.
+     * @param source whisper или vosk
+     * @throws IllegalStateException если финализация не готова
+     * @throws IllegalArgumentException при неизвестном источнике */
+    public void onFinalSource(String source) {
+        if (!deferredFinalReport || !finalizationPrepared || finalReportRequested)
+            throw new IllegalStateException("Источник итогового текста сейчас не принимается");
+        if (!"whisper".equals(source) && !"vosk".equals(source) && !"mixed".equals(source))
+            throw new IllegalArgumentException("Неизвестный источник итогового текста");
+        if ("vosk".equals(source)) finalUsesVosk = true;
+        if ("mixed".equals(source)) finalUsesMixed = true;
+    }
+
+    /** Закрывает live-этап и подтверждает, что аналитика готова принять итоговые ответы. */
+    public void onPrepareFinal() {
+        if (!deferredFinalReport || finalReportRequested || finalizationPrepared)
+            throw new IllegalStateException("Итоговая обработка недоступна в этом режиме");
+        if (!finished && (phase == Phase.LISTENING || phase == Phase.TENTATIVE)) {
+            foldResults(speech.finish());
+            partial = "";
+            refreshCurrent();
+            if (words > 0) commitCurrent(false);
+        }
+        finished = true;
+        phase = Phase.IDLE;
+        finalizationPrepared = true;
+        out.send(Map.of("type", "finalization_ready"));
+    }
+
+    /** Принимает итоговый ответ без дополнительного предупреждения о качестве.
+     * @param id ID ответа
+     * @param questionId ID основного вопроса
+     * @param followUpId ID уточнения или null
+     * @param text итоговый текст
+     * @param source whisper или vosk */
+    public void onFinalAnswer(int id, String questionId, String followUpId, String text, String source) {
+        onFinalAnswer(id, questionId, followUpId, text, source, false);
+    }
+
+    /** Принимает итоговый ответ и признак неполной транскрипции.
+     * @param id ID ответа
+     * @param questionId ID основного вопроса
+     * @param followUpId ID уточнения или null
+     * @param text итоговый текст
+     * @param source whisper или vosk
+     * @param transcriptIncomplete присутствуют спорные или нераспознанные участки
+     * @throws IllegalArgumentException при ошибке ID, источника или текста
+     * @throws IllegalStateException если финализация не готова */
+    public void onFinalAnswer(int id, String questionId, String followUpId, String text, String source, boolean transcriptIncomplete) {
+        if (!deferredFinalReport || !finalizationPrepared || finalReportRequested)
+            throw new IllegalStateException("Итоговые ответы сейчас не принимаются");
+        InterviewSession.AttemptRef ref = answerRefs.get(id);
+        if (!interview.matchesAnswer(ref, questionId, followUpId))
+            throw new IllegalArgumentException("Ответ не соответствует заданному вопросу");
+        if (!"whisper".equals(source) && !"vosk".equals(source) && !"mixed".equals(source))
+            throw new IllegalArgumentException("Неизвестный источник ответа");
+        if (text == null || text.length() > 12000) throw new IllegalArgumentException("Недопустимый размер ответа");
+        if (!finalAnswerIds.add(id)) throw new IllegalArgumentException("Итоговый ответ уже получен");
+        if ("vosk".equals(source)) finalUsesVosk = true;
+        if ("mixed".equals(source)) finalUsesMixed = true;
+        finalTranscriptIncomplete |= transcriptIncomplete;
+        interview.replaceFinalAnswer(ref, normalizer.normalize(text, false), normalizer.normalize(text, true),
+                !"vosk".equals(source));
     }
 
     /** Применяет позднюю расшифровку Whisper к тому же ответу, который уже оценён.
@@ -354,10 +483,11 @@ public final class LiveInterview {
      * @param text уточнённый текст распознавания
      */
     public void onRefined(int id, String text) {
+        if (deferredFinalReport) throw new IllegalStateException("Live-уточнения не принимаются при итоговом анализе");
         InterviewSession.AttemptRef ref = answerRefs.get(id);
         if (ref == null || text == null || text.isBlank()) return;
         interview.refine(ref, normalizer.normalize(text, false), normalizer.normalize(text, true), 2);
-        startScoring(ref, id);
+        if (!deferredFinalReport) startScoring(ref, id);
         Map<String, Object> event = new LinkedHashMap<>();
         event.put("type", "refined");
         event.put("answerId", id);
@@ -463,7 +593,7 @@ public final class LiveInterview {
         InterviewSession.AttemptRef ref = interview.lastAttempt();
         int committedAnswerId = ++answerId;
         if (ref != null) answerRefs.put(committedAnswerId, ref);
-        if (awaitExternalRefinement && !text.isBlank()) pendingRefinements.add(committedAnswerId);
+        if (!deferredFinalReport && awaitExternalRefinement && !text.isBlank()) pendingRefinements.add(committedAnswerId);
         tentative = null;
         tentativeFuture = null;
         tentativeVerdict = null;
@@ -496,8 +626,8 @@ public final class LiveInterview {
         // ---- вне критического пути ----
         // текст получен после flush Vosk, то есть уже финальный: фиксируем как «Vosk», остальное доточит Whisper
         interview.refine(ref, text, display, 1);
-        if (!text.isBlank()) startScoring(ref, answerId);
-        if (transcriber != null && !text.isBlank())
+        if (!deferredFinalReport && !text.isBlank()) startScoring(ref, answerId);
+        if (!deferredFinalReport && transcriber != null && !text.isBlank())
             startSecondPass(ref, trimAnswerAudio(detector.speechStartMs()),
                     Math.max(0, detector.speechStartMs() - 300), answerId);
 
@@ -523,18 +653,51 @@ public final class LiveInterview {
 
     /** Фоновая оценка по критериям для отчёта: вне критического пути, с низким приоритетом у модели. */
     private void startScoring(InterviewSession.AttemptRef ref, int answerId) {
-        if (judge == null || !judge.ready()) return;
+        if (judge == null || !judge.ready()) {
+            if (deferredFinalReport) finalScoringIncomplete = true;
+            return;
+        }
         final int version = answerVersion;
         try {
             CompletableFuture<Void> f = judge.score(interview.judgeInput(ref)).thenAccept(v -> {
                 if (version == answerVersion) interview.applyScoring(ref, v);
             }).exceptionally(e -> {
+                if (deferredFinalReport) finalScoringIncomplete = true;
                 out.send(Map.of("type", "judge_error", "answerId", answerId,
                         "message", String.valueOf(e.getCause() == null ? e : e.getCause())));
                 return null;
             });
             pending.add(f);
         } catch (RuntimeException e) {
+            if (deferredFinalReport) finalScoringIncomplete = true;
+            out.send(Map.of("type", "judge_error", "answerId", answerId, "message", String.valueOf(e.getMessage())));
+        }
+    }
+
+    private void startFollowUpScoring(InterviewSession.AttemptRef ref, int answerId) {
+        if (interview.missingFollowUpReference(ref)) {
+            finalReferencesMissing = true;
+            return;
+        }
+        var input = interview.followUpJudgeInput(ref);
+        if (input == null || input.turns().get(0).answer().isBlank()) return;
+        if (judge == null || !judge.ready()) {
+            finalScoringIncomplete = true;
+            return;
+        }
+        final int version = answerVersion;
+        try {
+            var f = judge.score(input).thenAccept(v -> {
+                if (version == answerVersion) interview.applyFollowUpScoring(ref, v);
+            }).exceptionally(e -> {
+                finalScoringIncomplete = true;
+                out.send(Map.of("type", "judge_error", "answerId", answerId,
+                        "message", String.valueOf(e.getCause() == null ? e : e.getCause())));
+                return null;
+            });
+            pending.add(f);
+        } catch (RuntimeException e) {
+            finalScoringIncomplete = true;
             out.send(Map.of("type", "judge_error", "answerId", answerId, "message", String.valueOf(e.getMessage())));
         }
     }
@@ -562,7 +725,7 @@ public final class LiveInterview {
     private void finishInterview() {
         finished = true;
         phase = Phase.IDLE;
-        sendReport();
+        if (!deferredFinalReport) sendReport();
     }
 
     // ------------------------------------------------------------------ вспомогательное
@@ -697,12 +860,29 @@ public final class LiveInterview {
             try {
                 CompletableFuture.allOf(pending.toArray(new CompletableFuture<?>[0])).get(pendingWaitMs, TimeUnit.MILLISECONDS);
             } catch (Exception ignored) {
-                // Фоновая оценка не должна блокировать выдачу отчёта.
+                if (deferredFinalReport) {
+                    finalScoringIncomplete = true;
+                    answerVersion++; // Поздний результат не должен менять уже опубликованный отчёт.
+                }
             }
         }
-        InterviewDetails details = interview.details(candidate, startedAt, settings);
+        Map<String, String> reportSettings = new LinkedHashMap<>(settings);
+        if (deferredFinalReport) reportSettings.put("Источник итогового текста", finalUsesVosk ? "Vosk — резервная оценка" : finalUsesMixed ? "Основная транскрипция с резервными участками Vosk" : "Whisper");
+        if (deferredFinalReport && finalScoringIncomplete)
+            reportSettings.put("Состояние оценки FRIDA", "Неполная оценка; используются резервные правила");
+        if (deferredFinalReport && finalReferencesMissing)
+            reportSettings.put("Эталоны уточнений", "Отсутствуют; отдельная оценка некоторых уточнений недоступна");
+        if (deferredFinalReport && finalTranscriptIncomplete)
+            reportSettings.put("Качество итоговой транскрипции", "Есть спорные или нераспознанные участки; требуется проверка");
+        InterviewDetails details = interview.details(candidate, startedAt, reportSettings);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("type", "report");
+        if (deferredFinalReport) {
+            m.put("transcriptSource", finalUsesVosk ? "vosk_fallback" : finalUsesMixed ? "mixed" : "whisper");
+            m.put("scoringIncomplete", finalScoringIncomplete);
+            m.put("transcriptIncomplete", finalTranscriptIncomplete);
+            m.put("referencesMissing", finalReferencesMissing);
+        }
         m.put("report", details.report());      // эталонные ответы в браузер не уходят — только оценки
         if (exporter != null) {
             try {
@@ -729,6 +909,8 @@ public final class LiveInterview {
     private Map<String, Object> question(InterviewSession.Prompt p, int graceMs) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("type", "question");
+        m.put("questionId", p.stableQuestionId());
+        if (p.followUpId() != null) m.put("followUpId", p.followUpId());
         m.put("number", p.number());
         m.put("total", p.total());
         m.put("level", p.level());
