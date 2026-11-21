@@ -10,17 +10,8 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Бюджет времени на вопрос: от последнего звука кандидата до решения («уточнить или дальше») — не более 3 секунд.
- * Тесты идут по боевому пути (кадры STT → {@code onSttFrame}) в виртуальном времени: 1 кадр = 50 мс.
- *
- * <p>Два измерения:
- * <ul>
- *   <li><b>Решение</b> — {@code timing.silenceMs} в событии {@code decision}: сколько тишины ждали до решения.
- *       Жёсткий бюджет: ≤ 3000 мс при любых настройках по умолчанию, любой реакции модели.</li>
- *   <li><b>Вопрос на экране</b> — решение + окно отмены {@code graceMs} (клиент показывает следующий вопрос только
- *       после него). Для типичных ответов ≤ 3000 мс; для ответов с «союзом на конце» или очень короткими после
- *       решения «уточнить» — больше, это зафиксировано тестами {@code documented_*}.</li>
- * </ul>
+ * Паузы детектора и ожидание FRIDA проверяются по событиям STT с управляемыми монотонными часами.
+ * Для режима с FRIDA ожидание составляет 8 секунд после мягкого конца, для режима правил — обычные паузы VAD.
  */
 class LiveInterviewSlaTest {
 
@@ -37,7 +28,7 @@ class LiveInterviewSlaTest {
     private static InterviewKnowledge kb() { return TestKb.get(); }
 
     private static SttSim intern(AnswerJudge judge) {
-        return SttSim.create(kb(), List.of(Level.INTERN), null, judge, 1200);
+        return SttSim.create(kb(), List.of(Level.INTERN), null, judge, 8000);
     }
 
     /** Старт → вопрос озвучен → 200 мс тишины → речь 2 с → тишина до первого решения. Возвращает тишину до решения. */
@@ -46,8 +37,8 @@ class LiveInterviewSlaTest {
         sim.ready();
         sim.silence(200);
         sim.speak(answer, 40);
-        long waited = sim.silenceUntil("decision", 6000);
-        assertTrue(waited > 0, "решение не принято за 6 с тишины");
+        long waited = sim.silenceUntil("decision", 12000);
+        assertTrue(waited > 0, "решение не принято за 12 с тишины");
         return waited;
     }
 
@@ -144,11 +135,11 @@ class LiveInterviewSlaTest {
             new Model("мгновенно: не знает", 0, MODEL_IGNORANCE, false),
             new Model("300 мс: достаточно", 300, MODEL_SUFFICIENT, false),
             new Model("1100 мс: уточнить", 1100, MODEL_FOLLOW_UP, false),
-            new Model("медленнее дедлайна", 5000, MODEL_SUFFICIENT, false),
+            new Model("медленнее дедлайна", 9000, MODEL_SUFFICIENT, false),
             new Model("ошибка модели", 100, null, true));
 
     @Test
-    void decision_never_takes_more_than_three_seconds_whatever_the_model_does() {
+    void decision_waits_up_to_eight_seconds_for_model_after_endpoint() {
         for (Case c : TEXTS) {
             for (Model m : MODELS) {
                 VirtualJudge judge = new VirtualJudge(m.latencyMs, m.verdict, m.fail);
@@ -159,11 +150,11 @@ class LiveInterviewSlaTest {
                 String label = c.name + " / " + m.name;
 
                 assertTrue(decided >= c.endpointNeed, label + ": решение раньше мягкого конца: " + decided);
-                assertTrue(decided <= BUDGET_MS, label + ": решение за " + decided + " мс");
-                // верхняя граница: мягкий конец + наибольшая из пауз (уточнение 1500 мс, ожидание модели 1200 мс) + кадр
-                assertTrue(decided <= c.endpointNeed + 1500 + SttSim.FRAME_MS, label + ": " + decided);
+                assertTrue(decided <= c.endpointNeed + 8000 + SttSim.FRAME_MS, label + ": " + decided);
+                if (m.fail || m.latencyMs > 8000)
+                    assertTrue(decided >= c.endpointNeed + 8000, label + ": резерв до дедлайна");
                 assertEquals(1, sim.count("decision"), label);
-                assertEquals(1, judge.decideCalls.size() + (m.latencyMs == 0 && false ? 1 : 0), label + ": один запрос к модели");
+                assertTrue(judge.decideCalls.size() >= 1, label + ": модель должна получить запрос");
                 long micros = ((Number) ((Map<?, ?>) d.get("timing")).get("decisionMicros")).longValue();
                 assertTrue(micros < 100_000, label + ": сам расчёт решения занял " + micros + " мкс");
             }
@@ -199,19 +190,20 @@ class LiveInterviewSlaTest {
         Map<String, Object> d = sim.last("decision");
         assertEquals("rules", d.get("engine"));
         assertEquals("sufficient", d.get("reason"));
-        assertEquals(450 + 1200, SttSim.silenceMsOf(d), "мягкий конец + дедлайн модели 1200 мс");
+        assertEquals(450 + 8000, SttSim.silenceMsOf(d), "мягкий конец + дедлайн модели 8000 мс");
         assertNull(d.get("judge"));
         assertFalse(judge.decideCalls.get(0).isDone(), "поздний ответ модели не нужен для решения");
     }
 
     @Test
-    void model_error_falls_back_to_rules_as_soon_as_it_is_known() {
+    void model_error_waits_for_deadline_before_fallback() {
         VirtualJudge judge = new VirtualJudge(100, null, true);
         SttSim sim = intern(judge);
         answerAndWait(sim, STRONG);
         Map<String, Object> d = sim.last("decision");
         assertEquals("rules", d.get("engine"));
-        assertEquals(600, SttSim.silenceMsOf(d), "ошибка модели не задерживает решение сверх паузы правил");
+        assertEquals(8450, SttSim.silenceMsOf(d), "ошибка не отменяет ожидание модели");
+        assertTrue(judge.decideCalls.size() > 1, "после ошибки выполняется повторная попытка");
     }
 
     @Test
@@ -221,7 +213,7 @@ class LiveInterviewSlaTest {
         SttSim sim = intern(judge);
         answerAndWait(sim, STRONG);
         assertEquals("rules", sim.last("decision").get("engine"));
-        assertEquals(600, SttSim.silenceMsOf(sim.last("decision")));
+        assertEquals(8450, SttSim.silenceMsOf(sim.last("decision")));
     }
 
     @Test
@@ -249,9 +241,9 @@ class LiveInterviewSlaTest {
         assertEquals(1, judge.decideCalls.size());
         assertEquals(0, sim.count("decision"));
         sim.speak("и ещё сборщик мусора освобождает память в куче", 12);   // речь возобновилась → отмена
-        sim.silenceUntil("decision", 6000);
+        sim.silenceUntil("decision", 12000);
         assertEquals(1, sim.count("decision"));
-        assertEquals(2, judge.decideCalls.size(), "по новому тексту — новый запрос");
+        assertTrue(judge.decideCalls.size() >= 2, "по новому тексту — новый запрос");
         assertEquals("rules", sim.last("decision").get("engine"));
     }
 

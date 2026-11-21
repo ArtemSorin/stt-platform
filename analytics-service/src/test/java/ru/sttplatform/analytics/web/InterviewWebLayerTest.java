@@ -26,6 +26,20 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class InterviewWebLayerTest {
 
+    @Test
+    void enabled_frida_rejects_short_decision_or_http_timeout() {
+        InterviewConfig config = new InterviewConfig();
+        JudgeProperties tooShort = new JudgeProperties(true, null, null, null, 15000, null, 1200, null, null,
+                null, null, null, null, null, null, null, null, null);
+        JudgeProperties shortHttp = new JudgeProperties(true, null, null, null, 4000, null, 8000, null, null,
+                null, null, null, null, null, null, null, null, null);
+        JudgeProperties defaults = new JudgeProperties(true, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null);
+        assertThrows(IllegalArgumentException.class, () -> config.fridaJudge(tooShort));
+        assertThrows(IllegalArgumentException.class, () -> config.fridaJudge(shortHttp));
+        assertNotNull(config.fridaJudge(defaults));
+    }
+
     // ---------------------------------------------------------------- токен внутреннего канала
 
     private static ServerHttpRequest request(String token) {

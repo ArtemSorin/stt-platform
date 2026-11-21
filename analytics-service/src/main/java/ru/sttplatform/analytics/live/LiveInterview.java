@@ -5,6 +5,7 @@ import ru.sttplatform.analytics.engine.AnswerTiming;
 import ru.sttplatform.analytics.engine.EndpointDetector;
 import ru.sttplatform.analytics.engine.InterviewDetails;
 import ru.sttplatform.analytics.engine.InterviewSession;
+import ru.sttplatform.analytics.engine.JudgeInput;
 import ru.sttplatform.analytics.engine.SpokenText;
 import ru.sttplatform.analytics.engine.TermNormalizer;
 import ru.sttplatform.analytics.engine.Verdict;
@@ -19,6 +20,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Склейка конвейера для одного подключения: звук → Vosk → конец ответа → решение → следующий вопрос.
@@ -36,7 +38,7 @@ import java.util.concurrent.TimeUnit;
  *       клиент показывает и озвучивает только после окна. Если человек всё-таки продолжил — решение
  *       откатывается (retract), и он дозаканчивает ответ на прежний вопрос.</li>
  * </ol>
- * Решение считается за микросекунды; тяжёлое (flush Vosk, второй проход Whisper, пересчёт отчёта) идёт вне критического пути.
+ * Смысловая оценка FRIDA выполняется асинхронно; при отсутствии заключения автомат ожидает установленный бюджет.
  * @version 1.0.0
  */
 public final class LiveInterview {
@@ -84,6 +86,7 @@ public final class LiveInterview {
     private final Sender out;
     private final TermNormalizer normalizer;
     private final SpokenText spoken;
+    private final AtomicLong previewGeneration = new AtomicLong();
 
     private Timing timing = Timing.defaults();
     private Transcriber transcriber;
@@ -110,12 +113,15 @@ public final class LiveInterview {
     private InterviewSession.Peek tentative;
     // смысловая оценка модели на мягком конце ответа: решение ждёт заключение, но не дольше judgeDeadlineMs
     private AnswerJudge judge;
-    private long judgeDeadlineMs = 1200;
+    private long judgeDeadlineMs = 8000;
     private CompletableFuture<Verdict> tentativeFuture;
     private String tentativeText;
     private Verdict tentativeVerdict;
     private boolean tentativeResolved;
     private long tentativeStartSilenceMs;
+    private long tentativeStartedNanos;
+    private long nextJudgeRetryNanos;
+    private java.util.function.LongSupplier decisionClock = System::nanoTime;
     private long commitAtSilenceMs;
     private long graceStartAudioMs;
     private boolean pendingFinish;
@@ -165,8 +171,8 @@ public final class LiveInterview {
     }
 
     /**
-     * Подключает смысловую оценку ответов моделью. Без неё (или пока модель недоступна) решения принимают правила
-     * на ключевых словах.
+     * Подключает смысловую оценку ответов моделью. Если модель временно недоступна, правила ждут окончания бюджета;
+     * при явно отключённой модели они применяются без ожидания.
      *
      * @param judge модель оценки или {@code null}
      * @param decisionDeadlineMs сколько ждать заключение после конца ответа, прежде чем решить по правилам
@@ -175,6 +181,9 @@ public final class LiveInterview {
         this.judge = judge;
         this.judgeDeadlineMs = decisionDeadlineMs;
     }
+
+    /** Подмена монотонных часов в проверках автомата. */
+    void setDecisionClock(java.util.function.LongSupplier clock) { this.decisionClock = clock; }
 
     /**
      * Подключает второй проход распознавания.
@@ -247,6 +256,7 @@ public final class LiveInterview {
 
     /** Клиент показал/озвучил вопрос и готов слушать ответ: с этого момента идёт отсчёт «скорости ответа». */
     public void onReady() {
+        previewGeneration.incrementAndGet();
         if (finished) return;
         committed.setLength(0);
         answerAudio.reset();
@@ -270,17 +280,55 @@ public final class LiveInterview {
         if (finished || phase == Phase.IDLE || phase == Phase.WAIT_READY || displayText == null || displayText.isBlank())
             return;
         long started = System.nanoTime();
-        if (judge != null && judge.ready()) {
-            CompletableFuture<Verdict> future = judge.preview(interview.judgeInput(displayText));
-            if (future != null) {                  // модель свободна — подсказка по смыслу; иначе ниже мгновенная по правилам
-                future.whenComplete((verdict, error) -> {
-                    InterviewSession.Peek peek = interview.peek(normalizer.normalize(displayText, false), error == null ? verdict : null);
-                    out.send(previewEvent(peek, displayText, requestId, started));
-                });
-                return;
-            }
+        long generation = previewGeneration.incrementAndGet();
+        if (judge == null) {
+            out.send(previewEvent(interview.peek(normalizer.normalize(displayText, false)), displayText, requestId, started));
+            return;
         }
-        out.send(previewEvent(interview.peek(normalizer.normalize(displayText, false)), displayText, requestId, started));
+        previewAttempt(generation, displayText, requestId, interview.judgeInput(displayText), started);
+    }
+
+    /** Повторяем предварительную оценку до истечения общего бюджета; устаревшие подсказки отбрасываем. */
+    private void previewAttempt(long generation, String text, String requestId, JudgeInput input, long started) {
+        if (previewGeneration.get() != generation) return;
+        long remaining = TimeUnit.MILLISECONDS.toNanos(judgeDeadlineMs) - (System.nanoTime() - started);
+        if (remaining <= 0) {
+            emitPreview(generation, text, requestId, started, null);
+            return;
+        }
+        CompletableFuture<Verdict> future;
+        try {
+            future = judge.ready() ? judge.preview(input) : null;
+        } catch (RuntimeException error) {
+            future = null;
+        }
+        if (future == null) {
+            schedulePreviewRetry(generation, text, requestId, input, started, remaining);
+            return;
+        }
+        future.copy().orTimeout(remaining, TimeUnit.NANOSECONDS).whenComplete((verdict, error) -> {
+            if (error == null && verdict != null && verdict.hasFacts()) {
+                emitPreview(generation, text, requestId, started, verdict);
+            } else {
+                long left = TimeUnit.MILLISECONDS.toNanos(judgeDeadlineMs) - (System.nanoTime() - started);
+                schedulePreviewRetry(generation, text, requestId, input, started, left);
+            }
+        });
+    }
+
+    private void schedulePreviewRetry(long generation, String text, String requestId, JudgeInput input,
+                                      long started, long remainingNanos) {
+        if (previewGeneration.get() != generation) return;
+        long delay = Math.max(0, Math.min(TimeUnit.MILLISECONDS.toNanos(250), remainingNanos));
+        CompletableFuture.delayedExecutor(delay, TimeUnit.NANOSECONDS).execute(
+                () -> previewAttempt(generation, text, requestId, input, started));
+    }
+
+    private void emitPreview(long generation, String text, String requestId, long started, Verdict verdict) {
+        if (previewGeneration.get() != generation) return;
+        InterviewSession.Peek peek = interview.peek(normalizer.normalize(text, false), verdict);
+        if (previewGeneration.compareAndSet(generation, generation + 1))
+            out.send(previewEvent(peek, text, requestId, started));
     }
 
     private Map<String, Object> previewEvent(InterviewSession.Peek peek, String displayText, String requestId, long started) {
@@ -375,6 +423,7 @@ public final class LiveInterview {
             }
             case TENTATIVE -> {
                 if (st != EndpointDetector.State.ENDPOINT) cancelTentative();                 // человек продолжил
+                else if (!current.equals(tentativeText)) enterTentative(); // пришло уточнение текста: старый вердикт больше не подходит
                 else if (resolveTentative() && detector.silenceMs() >= commitAtSilenceMs) commitCurrent(true);   // жёсткий конец
             }
             case GRACE -> {
@@ -393,6 +442,7 @@ public final class LiveInterview {
 
     /** Кнопка «Завершить»: отчёт по уже отвеченным вопросам. */
     public void onStop() {
+        previewGeneration.incrementAndGet();
         if (!deferredFinalReport) {
             if (!finished) finishInterview();
             return;
@@ -413,6 +463,11 @@ public final class LiveInterview {
         sendReport();
     }
 
+    /** Отменяет отложенные подсказки при разрыве соединения. */
+    public void close() {
+        previewGeneration.incrementAndGet();
+    }
+
     /** Фиксирует источник финализации даже если в интервью нет ответов.
      * @param source whisper или vosk
      * @throws IllegalStateException если финализация не готова
@@ -428,6 +483,7 @@ public final class LiveInterview {
 
     /** Закрывает live-этап и подтверждает, что аналитика готова принять итоговые ответы. */
     public void onPrepareFinal() {
+        previewGeneration.incrementAndGet();
         if (!deferredFinalReport || finalReportRequested || finalizationPrepared)
             throw new IllegalStateException("Итоговая обработка недоступна в этом режиме");
         if (!finished && (phase == Phase.LISTENING || phase == Phase.TENTATIVE)) {
@@ -526,14 +582,12 @@ public final class LiveInterview {
         tentativeVerdict = null;
         tentativeResolved = true;
         tentativeText = current;
-        if (judge != null && judge.ready() && words > 0) {
+        tentativeStartedNanos = decisionClock.getAsLong();
+        nextJudgeRetryNanos = tentativeStartedNanos;
+        if (judge != null && words > 0) {
             // решение по смыслу: просим модель сразу, а паузу «на раздумье» отсчитываем от этого же момента
-            try {
-                tentativeFuture = judge.decide(interview.judgeInput(currentDisplay));
-                tentativeResolved = false;
-            } catch (RuntimeException e) {
-                tentativeFuture = null;
-            }
+            tentativeResolved = false;
+            requestTentative();
         }
         tentativeStartSilenceMs = detector.silenceMs();
         if (!tentativeResolved) {
@@ -560,14 +614,32 @@ public final class LiveInterview {
      */
     private boolean resolveTentative() {
         if (tentativeResolved) return true;
-        if (tentativeFuture.isDone()) {
-            tentativeVerdict = tentativeFuture.isCompletedExceptionally() ? null : tentativeFuture.getNow(null);
-        } else if (detector.silenceMs() - tentativeStartSilenceMs < judgeDeadlineMs) {
+        long now = decisionClock.getAsLong();
+        if (tentativeFuture != null && tentativeFuture.isDone() && !tentativeFuture.isCompletedExceptionally()
+                && !tentativeFuture.isCancelled()) {
+            tentativeVerdict = tentativeFuture.getNow(null);
+        }
+        if ((tentativeVerdict == null || !tentativeVerdict.hasFacts())
+                && now - tentativeStartedNanos < TimeUnit.MILLISECONDS.toNanos(judgeDeadlineMs)) {
+            if ((tentativeFuture == null || tentativeFuture.isDone()) && now >= nextJudgeRetryNanos) {
+                requestTentative();
+            }
             return false;
         }
-        tentativeResolved = true;                   // время вышло или модель ответила (в том числе сбоем) — решаем
+        tentativeResolved = true;                   // дождались пригодного заключения или конца бюджета
         planCommit(interview.peek(current, tentativeVerdict));
         return true;
+    }
+
+    /** Повторяет временно неудачный запрос, не блокируя поток аудио. */
+    private void requestTentative() {
+        nextJudgeRetryNanos = decisionClock.getAsLong() + TimeUnit.MILLISECONDS.toNanos(500);
+        try {
+            if (!judge.ready()) return;
+            tentativeFuture = judge.decide(interview.judgeInput(currentDisplay));
+        } catch (RuntimeException e) {
+            tentativeFuture = null;
+        }
     }
 
     private void cancelTentative() {
@@ -585,6 +657,7 @@ public final class LiveInterview {
 
     /** Жёсткий конец: решение принято и отправлено. Дальше — окно отмены. */
     private void commit(String text, String display, AnswerTiming at, boolean grace) {
+        previewGeneration.incrementAndGet();
         long t0 = System.nanoTime();
         // заключение модели годится только для того самого текста, по которому его запрашивали
         Verdict verdict = tentativeResolved && tentativeVerdict != null && text.equals(tentativeText) ? tentativeVerdict : null;
@@ -723,6 +796,7 @@ public final class LiveInterview {
     }
 
     private void finishInterview() {
+        previewGeneration.incrementAndGet();
         finished = true;
         phase = Phase.IDLE;
         if (!deferredFinalReport) sendReport();

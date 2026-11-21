@@ -57,12 +57,14 @@ class LiveInterviewJudgeTest {
         final List<Map<String, Object>> events = new ArrayList<>();
         final LiveInterview live;
         final FakeJudge judge = new FakeJudge();
+        long nowMs;
 
         Run(String answer, int voiced, long deadlineMs) {
             InterviewSession session = new InterviewSession(TestKb.get(), List.of(Level.INTERN), new DecisionPolicy(2, 0.08));
             live = new LiveInterview(new LiveInterviewTest.ScriptedEngine(answer, voiced), session,
                     new EndpointDetector(new EndpointDetector.Config()), events::add);
             live.setJudge(judge, deadlineMs);
+            live.setDecisionClock(() -> java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(nowMs));
         }
 
         Map<String, Object> last(String type) {
@@ -75,7 +77,10 @@ class LiveInterviewJudgeTest {
             return n;
         }
         void frames(boolean voiced, int n) {
-            for (int i = 0; i < n; i++) live.onAudio(Pcm.frame(voiced), Pcm.FRAME_SAMPLES * 2);
+            for (int i = 0; i < n; i++) {
+                nowMs += 50;
+                live.onAudio(Pcm.frame(voiced), Pcm.FRAME_SAMPLES * 2);
+            }
         }
         /** Тишина, пока не появится решение; возвращает число кадров или -1. */
         int silenceUntilDecision(int max) {
@@ -212,25 +217,58 @@ class LiveInterviewJudgeTest {
     }
 
     @Test
-    void failed_model_call_falls_back_to_rules_without_waiting_for_the_deadline() {
-        Run r = new Run(ANSWER, 40, 60_000);
+    void failed_model_call_waits_for_deadline_before_falling_back() {
+        Run r = new Run(ANSWER, 40, 8000);
         r.live.start();
         r.speak(40);
         r.frames(false, 12);
         r.judge.decisions.get(0).completeExceptionally(new IllegalStateException("сервер упал"));
-        assertTrue(r.silenceUntilDecision(60) > 0);
+        assertEquals(-1, r.silenceUntilDecision(100));
+        assertTrue(r.silenceUntilDecision(100) > 0);
         assertEquals("rules", r.last("decision").get("engine"));
     }
 
     @Test
-    void model_that_is_not_ready_is_not_even_asked() {
-        Run r = new Run(ANSWER, 40, 5000);
+    void model_that_is_not_ready_waits_before_rules() {
+        Run r = new Run(ANSWER, 40, 8000);
         r.judge.ready = false;
         r.live.start();
         r.speak(40);
+        assertEquals(-1, r.silenceUntilDecision(100));
         assertTrue(r.silenceUntilDecision(100) > 0);
         assertTrue(r.judge.decisions.isEmpty());
         assertEquals("rules", r.last("decision").get("engine"));
+    }
+
+    @Test
+    void unavailable_frida_never_falls_back_before_eight_real_seconds() {
+        Run r = new Run(ANSWER, 40, 8000);
+        r.judge.ready = false;
+        r.live.start();
+        r.speak(40);
+        r.frames(false, 12);
+        r.frames(false, 30); // набрать паузу до допустимого перехода к уточнению
+        long started = (long) org.springframework.test.util.ReflectionTestUtils.getField(r.live, "tentativeStartedNanos");
+        r.nowMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(started) + 7949;
+        r.frames(false, 1);
+        assertEquals(0, r.count("decision"));
+        r.frames(false, 1);
+        assertEquals("rules", r.last("decision").get("engine"));
+    }
+
+    @Test
+    void recovers_from_an_error_within_the_budget_and_uses_frida() {
+        Run r = new Run(ANSWER, 40, 8000);
+        r.live.start();
+        r.speak(40);
+        r.frames(false, 12);
+        r.judge.decisions.get(0).completeExceptionally(new IllegalStateException("временный сбой"));
+        r.frames(false, 12);
+        assertEquals(2, r.judge.decisions.size());
+        assertEquals(0, r.count("decision"));
+        r.judge.decisions.get(1).complete(verdict(0.95));
+        assertTrue(r.silenceUntilDecision(5) > 0);
+        assertEquals("frida", r.last("decision").get("engine"));
     }
 
     @Test

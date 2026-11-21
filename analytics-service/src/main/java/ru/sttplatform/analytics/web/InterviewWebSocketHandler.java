@@ -192,7 +192,7 @@ public final class InterviewWebSocketHandler extends AbstractWebSocketHandler {
                     Active current = holder[0];
                     if (current != null) sendSession(ws, current, event);
                 });
-        live.setJudge(judge, judgeProps.decisionDeadlineMs());
+        live.setJudge(judgeProps.enabled() ? judge : null, judgeProps.decisionDeadlineMs());
         live.setDeferredFinalReport(data.path("deferredFinalReport").asBoolean(false));
         live.setTiming(new LiveInterview.Timing(properties.nextExtraMs(), properties.otherNextExtraMs(),
                 properties.followUpExtraMs(), properties.graceMs()));
@@ -232,7 +232,10 @@ public final class InterviewWebSocketHandler extends AbstractWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession ws, CloseStatus status) {
         Active session = active.remove(ws.getId());
-        if (session != null) session.speech.close();
+        if (session != null) {
+            session.live.close();
+            session.speech.close();
+        }
     }
 
     /** Записывает транспортную ошибку внутреннего WebSocket-канала.

@@ -75,6 +75,9 @@ public class InterviewConfig {
      */
     @Bean
     public FridaJudge fridaJudge(JudgeProperties j) {
+        if (j.enabled() && (j.decisionDeadlineMs() != 8000 || j.requestTimeoutMs() < 8000)) {
+            throw new IllegalArgumentException("При включённой FRIDA ожидание решения должно быть 8000 мс, а HTTP-таймаут — не менее 8000 мс");
+        }
         return new FridaJudge(j);
     }
 
