@@ -247,6 +247,18 @@ class LiveInterviewTest {
         assertTrue(shown.contains("JDK") && shown.contains("инструменты разработки"), shown);
     }
 
+    @Test
+    void role_filtered_snapshot_replaces_the_live_text_without_a_second_recognizer() {
+        Run r = new Run("", 0, List.of(Level.INTERN));
+        r.live.start();
+        r.live.onReady();
+        r.live.onSttFrame("snapshot", "первый вариант", 800, 1000, 0,
+                "SPEAKING", 50, 0, 50, 0);
+        r.live.onSttFrame("snapshot", "уточнённый ответ кандидата", 0, 0, 0,
+                "SPEAKING", 50, 0, 50, 0);
+        assertEquals("уточнённый ответ кандидата", r.last("partial").get("text"));
+    }
+
     // ===================================================================== окно отмены
 
     @Test

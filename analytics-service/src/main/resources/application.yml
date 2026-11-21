@@ -25,6 +25,9 @@ interview:
   report-download: true        # в отчёте есть эталонные ответы! false — не отдавать файл по HTTP
   # Подмена банка вопросов / словаря внешними файлами (иначе — встроенные из resources/interview):
   # questions-path: ./analytics-service/demo/questions-six.tsv
+  # Новый формат: укажите оба файла с вопросами и уточнениями.
+  # questions-path: ./analytics-service/demo/catalog-questions.tsv
+  # followups-path: ./analytics-service/demo/catalog-followups.tsv
   # glossary-path: D:/data/glossary.txt
 
   # ---- Смысловая оценка ответов моделью FRIDA-Decisions (judge/frida_server.py) ----
@@ -34,13 +37,13 @@ interview:
     enabled: ${JUDGE_ENABLED:true}
     url: ${JUDGE_URL:http://127.0.0.1:9100}
     protocol: sidecar              # sidecar — наш frida_server.py; vllm — сервер vLLM (POST /pooling)
-    decision-deadline-ms: 1200     # сколько ждать заключение после конца ответа, потом — правила
-    request-timeout-ms: 4000
+    decision-deadline-ms: 8000     # бюджет ожидания решения модели
+    request-timeout-ms: 15000
     score-timeout-ms: 30000        # фоновая оценка для отчёта
     max-state-chars: 1800          # окно модели 512 токенов; ответ стоит раньше эталона, режется эталон
-    preview-enabled: true          # подсказка на экране тоже по смыслу (пропускается, если модель занята)
-    breaker-failures: 3            # столько сбоев подряд — и модель на 15 с выключается
-    breaker-pause-ms: 15000
+    preview-enabled: true          # предварительная подсказка также ждёт модель до истечения бюджета
+    breaker-failures: 3            # после серии сбоев приостанавливаем запросы
+    breaker-pause-ms: 1000         # повторная попытка возможна внутри восьмисекундного бюджета
     # Пороги решений. Стартовые значения нужно калибровать: GET /api/judge/selfcheck
     sufficient-shift: 0.10         # «достаточно» = порог уровня вопроса (0,40…0,55) + сдвиг
     ignorance-p: 0.6
@@ -51,7 +54,7 @@ interview:
     process:                       # автозапуск сервера модели вместе с сервисом
       autostart: ${JUDGE_AUTOSTART:false}
       python: ${JUDGE_PYTHON:python}
-      script: judge/frida_server.py
+      script: ${JUDGE_SCRIPT:judge/frida_server.py}
       backend: ${JUDGE_BACKEND:torch}   # torch | onnx | heuristic | fake (тестовые заглушки)
       model: ${JUDGE_MODEL:ai-forever/FRIDA-Decisions}
       device: ${JUDGE_DEVICE:}          # cuda | cpu; пусто — автоматически

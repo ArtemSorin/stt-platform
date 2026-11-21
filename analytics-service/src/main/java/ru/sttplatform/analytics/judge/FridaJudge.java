@@ -29,8 +29,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * <ul>
  *   <li><b>Кэш и общий полёт.</b> Одинаковый запрос не отправляется дважды: подсказка на паузе и решение в конце
  *       ответа чаще всего про один и тот же текст.</li>
- *   <li><b>Автомат отказов.</b> После серии сбоев модель на время «выбита», и вызывающий код сразу работает по
- *       правилам, а не ждёт таймаута на каждом ответе.</li>
+ *   <li><b>Автомат отказов.</b> После серии сбоев запросы ненадолго приостанавливаются; вызывающий код
+ *       продолжает учитывать бюджет ожидания и может повторить запрос после восстановления.</li>
  *   <li><b>Приоритеты.</b> Решение идёт с высоким приоритетом, фоновая оценка — с низким, подсказка пропускается,
  *       если модель занята.</li>
  * </ul>
@@ -110,6 +110,13 @@ public final class FridaJudge implements AnswerJudge {
         if (!ready()) return CompletableFuture.failedFuture(new IllegalStateException("Модель оценки сейчас недоступна"));
         String key = kind + Json.write(request);
         CompletableFuture<Verdict> hit = cache.get(key);
+        if (hit != null && hit.isDone() && !hit.isCompletedExceptionally() && !hit.isCancelled()) {
+            Verdict verdict = hit.getNow(null);
+            if ("d".equals(kind) && (verdict == null || !verdict.hasFacts())) {
+                cache.remove(key, hit); // неполное заключение не должно блокировать повторную попытку
+                hit = null;
+            }
+        }
         if (hit != null && !(hit.isDone() && hit.isCompletedExceptionally())) {
             cacheHits.incrementAndGet();
             return hit;
@@ -174,7 +181,7 @@ public final class FridaJudge implements AnswerJudge {
         if (n >= props.breakerFailures()) {
             brokenUntilMs.set(System.currentTimeMillis() + props.breakerPauseMs());
             consecutiveFailures.set(0);
-            log.warn("Модель оценки выключена на {} с: интервью продолжается по правилам.", props.breakerPauseMs() / 1000);
+            log.warn("Модель оценки временно недоступна на {} с; действует бюджет ожидания решения.", props.breakerPauseMs() / 1000);
         }
     }
 

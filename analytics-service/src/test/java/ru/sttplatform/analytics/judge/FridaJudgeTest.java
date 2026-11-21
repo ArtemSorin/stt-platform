@@ -29,6 +29,7 @@ class FridaJudgeTest {
     private volatile int status = 200;
     private volatile long delayMs = 0;
     private volatile boolean wrapData = false;
+    private volatile boolean emptyDecision = false;
 
     @AfterEach
     void stop() {
@@ -51,6 +52,7 @@ class FridaJudgeTest {
                 Thread.currentThread().interrupt();
             }
             String answer = body.contains("completeness") ? scoring : decision;
+            if (emptyDecision && !body.contains("completeness")) answer = "{\"answers\":{}}";
             if (wrapData) answer = "{\"data\":" + answer + "}";
             byte[] bytes = answer.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
@@ -102,6 +104,16 @@ class FridaJudgeTest {
         get(judge.decide(input()));
         assertEquals(1, hits.get());
         assertEquals(2L, judge.stats().get("cacheHits"));
+    }
+
+    @Test
+    void decision_without_facts_is_not_reused_for_retry() throws Exception {
+        emptyDecision = true;
+        FridaJudge judge = new FridaJudge(props(serve(), "sidecar", 2000, 3));
+        assertFalse(get(judge.decide(input())).hasFacts());
+        emptyDecision = false;
+        assertTrue(get(judge.decide(input())).hasFacts());
+        assertEquals(2, hits.get());
     }
 
     @Test

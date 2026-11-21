@@ -19,6 +19,8 @@ class LiveInterviewJudgeTest {
         final List<CompletableFuture<Verdict>> decisions = new ArrayList<>();
         final List<CompletableFuture<Verdict>> scorings = new ArrayList<>();
         final List<JudgeInput> decisionInputs = new ArrayList<>();
+        final List<JudgeInput> scoreInputs = new ArrayList<>();
+        Verdict immediateScoring;
         final AtomicInteger previews = new AtomicInteger();
         boolean ready = true;
         Verdict immediate;
@@ -36,7 +38,8 @@ class LiveInterviewJudgeTest {
         }
 
         @Override public CompletableFuture<Verdict> score(JudgeInput input) {
-            CompletableFuture<Verdict> f = new CompletableFuture<>();
+            scoreInputs.add(input);
+            CompletableFuture<Verdict> f = immediateScoring == null ? new CompletableFuture<>() : CompletableFuture.completedFuture(immediateScoring);
             scorings.add(f);
             return f;
         }
@@ -54,12 +57,14 @@ class LiveInterviewJudgeTest {
         final List<Map<String, Object>> events = new ArrayList<>();
         final LiveInterview live;
         final FakeJudge judge = new FakeJudge();
+        long nowMs;
 
         Run(String answer, int voiced, long deadlineMs) {
             InterviewSession session = new InterviewSession(TestKb.get(), List.of(Level.INTERN), new DecisionPolicy(2, 0.08));
             live = new LiveInterview(new LiveInterviewTest.ScriptedEngine(answer, voiced), session,
                     new EndpointDetector(new EndpointDetector.Config()), events::add);
             live.setJudge(judge, deadlineMs);
+            live.setDecisionClock(() -> java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(nowMs));
         }
 
         Map<String, Object> last(String type) {
@@ -72,7 +77,10 @@ class LiveInterviewJudgeTest {
             return n;
         }
         void frames(boolean voiced, int n) {
-            for (int i = 0; i < n; i++) live.onAudio(Pcm.frame(voiced), Pcm.FRAME_SAMPLES * 2);
+            for (int i = 0; i < n; i++) {
+                nowMs += 50;
+                live.onAudio(Pcm.frame(voiced), Pcm.FRAME_SAMPLES * 2);
+            }
         }
         /** Тишина, пока не появится решение; возвращает число кадров или -1. */
         int silenceUntilDecision(int max) {
@@ -90,6 +98,70 @@ class LiveInterviewJudgeTest {
     }
 
     private static final String ANSWER = "джава это виртуальная машина она запускает программы а джи ди кей это для разработки там компилятор";
+
+    @Test
+    void deferred_report_scores_updated_text_only_after_stop() {
+        Run r = new Run(ANSWER, 40, 5000);
+        r.live.setDeferredFinalReport(true);
+        r.judge.immediate = verdict(0.95);
+        r.judge.immediateScoring = verdict(0.9);
+        r.live.start();
+        r.speak(40);
+        assertTrue(r.silenceUntilDecision(100) > 0);
+        int answerId = (Integer) r.last("decision").get("answerId");
+        assertTrue(r.judge.scoreInputs.isEmpty());
+        assertThrows(IllegalStateException.class, () ->
+                r.live.onFinalAnswer(answerId, "legacy-1", null, "Рано", "whisper"));
+        r.live.onPrepareFinal();
+        assertThrows(IllegalArgumentException.class, () ->
+                r.live.onFinalAnswer(answerId, "legacy-2", null, "Чужой ответ", "whisper"));
+        r.live.onFinalAnswer(answerId, "legacy-1", null, "Точный финальный ответ", "whisper");
+        assertThrows(IllegalStateException.class, () -> r.live.onRefined(answerId, "устаревший ответ"));
+        assertThrows(IllegalArgumentException.class, () ->
+                r.live.onFinalAnswer(answerId, "legacy-1", null, "Дубликат", "whisper"));
+        assertTrue(r.judge.scoreInputs.isEmpty());
+        assertNull(r.last("report"));
+        r.live.onStop();
+        assertEquals(1, r.judge.scoreInputs.size());
+        assertEquals("Точный финальный ответ", r.judge.scoreInputs.get(0).turns().get(0).answer());
+        assertNotNull(r.last("report"));
+    }
+
+    @Test
+    void deferred_report_does_not_score_a_skipped_answer() {
+        Run r = new Run("", 0, 5000);
+        r.live.setDeferredFinalReport(true);
+        r.live.start();
+        r.live.onSkip();
+        int answerId = (Integer) r.last("decision").get("answerId");
+        r.live.onPrepareFinal();
+        r.live.onFinalAnswer(answerId, "legacy-1", null, "", "whisper");
+        r.live.onStop();
+        assertTrue(r.judge.scoreInputs.isEmpty());
+        assertNotNull(r.last("report"));
+        assertEquals(false, r.last("report").get("scoringIncomplete"));
+    }
+
+    @Test
+    void late_final_scoring_does_not_change_report_after_timeout() {
+        Run r = new Run(ANSWER, 40, 5000);
+        r.live.setDeferredFinalReport(true);
+        r.live.setRefinementWait(10);
+        r.judge.immediate = verdict(0.95);
+        r.live.start();
+        r.speak(40);
+        assertTrue(r.silenceUntilDecision(100) > 0);
+        int answerId = (Integer) r.last("decision").get("answerId");
+        r.live.onPrepareFinal();
+        r.live.onFinalAnswer(answerId, "legacy-1", null, "Финальная транскрипция", "whisper");
+        r.live.onStop();
+        assertEquals(true, r.last("report").get("scoringIncomplete"));
+        var session = (InterviewSession) org.springframework.test.util.ReflectionTestUtils.getField(r.live, "interview");
+        var before = session.report();
+        assertEquals(1, r.judge.scorings.size());
+        r.judge.scorings.get(0).complete(verdict(0.95));
+        assertEquals(before, session.report());
+    }
 
     @Test
     void decision_waits_for_the_model_and_uses_its_verdict() {
@@ -145,25 +217,58 @@ class LiveInterviewJudgeTest {
     }
 
     @Test
-    void failed_model_call_falls_back_to_rules_without_waiting_for_the_deadline() {
-        Run r = new Run(ANSWER, 40, 60_000);
+    void failed_model_call_waits_for_deadline_before_falling_back() {
+        Run r = new Run(ANSWER, 40, 8000);
         r.live.start();
         r.speak(40);
         r.frames(false, 12);
         r.judge.decisions.get(0).completeExceptionally(new IllegalStateException("сервер упал"));
-        assertTrue(r.silenceUntilDecision(60) > 0);
+        assertEquals(-1, r.silenceUntilDecision(100));
+        assertTrue(r.silenceUntilDecision(100) > 0);
         assertEquals("rules", r.last("decision").get("engine"));
     }
 
     @Test
-    void model_that_is_not_ready_is_not_even_asked() {
-        Run r = new Run(ANSWER, 40, 5000);
+    void model_that_is_not_ready_waits_before_rules() {
+        Run r = new Run(ANSWER, 40, 8000);
         r.judge.ready = false;
         r.live.start();
         r.speak(40);
+        assertEquals(-1, r.silenceUntilDecision(100));
         assertTrue(r.silenceUntilDecision(100) > 0);
         assertTrue(r.judge.decisions.isEmpty());
         assertEquals("rules", r.last("decision").get("engine"));
+    }
+
+    @Test
+    void unavailable_frida_never_falls_back_before_eight_real_seconds() {
+        Run r = new Run(ANSWER, 40, 8000);
+        r.judge.ready = false;
+        r.live.start();
+        r.speak(40);
+        r.frames(false, 12);
+        r.frames(false, 30); // набрать паузу до допустимого перехода к уточнению
+        long started = (long) org.springframework.test.util.ReflectionTestUtils.getField(r.live, "tentativeStartedNanos");
+        r.nowMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(started) + 7949;
+        r.frames(false, 1);
+        assertEquals(0, r.count("decision"));
+        r.frames(false, 1);
+        assertEquals("rules", r.last("decision").get("engine"));
+    }
+
+    @Test
+    void recovers_from_an_error_within_the_budget_and_uses_frida() {
+        Run r = new Run(ANSWER, 40, 8000);
+        r.live.start();
+        r.speak(40);
+        r.frames(false, 12);
+        r.judge.decisions.get(0).completeExceptionally(new IllegalStateException("временный сбой"));
+        r.frames(false, 12);
+        assertEquals(2, r.judge.decisions.size());
+        assertEquals(0, r.count("decision"));
+        r.judge.decisions.get(1).complete(verdict(0.95));
+        assertTrue(r.silenceUntilDecision(5) > 0);
+        assertEquals("frida", r.last("decision").get("engine"));
     }
 
     @Test

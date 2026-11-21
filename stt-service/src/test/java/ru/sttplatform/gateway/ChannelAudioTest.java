@@ -8,8 +8,12 @@ import ru.sttplatform.gateway.config.GatewayProperties;
 import ru.sttplatform.diarization.session.DiarizationSession;
 import ru.sttplatform.diarization.session.SessionRegistry;
 import ru.sttplatform.stt.integration.IntegrationProperties;
-import ru.sttplatform.stt.vosk.SpeechSessionFactory;
 import ru.sttplatform.stt.whisper.WhisperClient;
+import ru.sttplatform.stt.transcript.InterviewAudioSpool;
+import org.junit.jupiter.api.io.TempDir;
+import java.nio.file.Path;
+import java.util.ArrayDeque;
+import java.util.concurrent.ArrayBlockingQueue;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -63,9 +67,29 @@ class ChannelAudioTest {
     }
 
     @Test
+    void live_stt_receives_only_system_audio_while_both_channels_are_recorded(@TempDir Path root) throws Exception {
+        byte[] system = {1, 2, 3, 4};
+        byte[] microphone = {11, 12, 13, 14};
+        var queue = new ArrayBlockingQueue<byte[]>(128);
+        try (var spool = new InterviewAudioSpool(root, "channels", true)) {
+            var orchestrator = mock(Orchestrator.class, CALLS_REAL_METHODS);
+            ReflectionTestUtils.setField(orchestrator, "separateChannels", true);
+            ReflectionTestUtils.setField(orchestrator, "sttQueue", queue);
+            ReflectionTestUtils.setField(orchestrator, "audio", new ArrayDeque<>());
+            ReflectionTestUtils.setField(orchestrator, "audioSpool", spool);
+            orchestrator.submitChannels(0, system, microphone);
+            assertArrayEquals(system, queue.remove());
+            assertTrue(queue.isEmpty());
+            spool.seal(2);
+            assertArrayEquals(system, spool.read(0, 0, 2));
+            assertArrayEquals(microphone, spool.read(1, 0, 2));
+        }
+    }
+
+    @Test
     void channel_session_rejects_repeated_sequence_and_format_switch() throws Exception {
         var manager = new SessionManager(mock(SessionRegistry.class), new GatewayProperties(null, null, null),
-                mock(WhisperClient.class), mock(SpeechSessionFactory.class), mock(IntegrationProperties.class));
+                mock(WhisperClient.class), mock(IntegrationProperties.class));
         Class<?> activeClass = Class.forName("ru.sttplatform.gateway.session.SessionManager$Active");
         var constructor = activeClass.getDeclaredConstructor(String.class);
         constructor.setAccessible(true);
@@ -87,4 +111,22 @@ class ChannelAudioTest {
         manager.liveAudioChannels("session", 1, pair);
         verify(orchestrator).submitChannels(2, new byte[]{1, 2, 3, 4}, new byte[]{11, 12, 13, 14});
     }
+    @Test
+    void session_manager_passes_deferred_report_setting_to_analytics(@TempDir Path root) throws Exception {
+        try (var stt = new ru.sttplatform.testsupport.MiniWsServer();
+             var analytics = new ru.sttplatform.testsupport.MiniWsServer()) {
+            var manager = new SessionManager(mock(SessionRegistry.class),
+                    new GatewayProperties(stt.httpUrl(), analytics.httpUrl(), root.toString()),
+                    mock(WhisperClient.class), new IntegrationProperties(null, null));
+            ReflectionTestUtils.setField(manager, "deferredFinalReport", true);
+            try {
+                manager.startTest("", false);
+                var peer = analytics.awaitConnection(0, 3000);
+                assertTrue(ru.sttplatform.testsupport.MiniWsServer.await(() -> !peer.texts.isEmpty(), 3000));
+                var start = ru.sttplatform.common.json.Json.tree(peer.texts.get(0));
+                assertTrue(start.path("deferredFinalReport").asBoolean());
+            } finally { manager.shutdown(); }
+        }
+    }
+
 }

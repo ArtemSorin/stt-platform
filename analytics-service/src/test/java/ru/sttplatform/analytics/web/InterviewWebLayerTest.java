@@ -26,6 +26,20 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class InterviewWebLayerTest {
 
+    @Test
+    void enabled_frida_rejects_short_decision_or_http_timeout() {
+        InterviewConfig config = new InterviewConfig();
+        JudgeProperties tooShort = new JudgeProperties(true, null, null, null, 15000, null, 1200, null, null,
+                null, null, null, null, null, null, null, null, null);
+        JudgeProperties shortHttp = new JudgeProperties(true, null, null, null, 4000, null, 8000, null, null,
+                null, null, null, null, null, null, null, null, null);
+        JudgeProperties defaults = new JudgeProperties(true, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null);
+        assertThrows(IllegalArgumentException.class, () -> config.fridaJudge(tooShort));
+        assertThrows(IllegalArgumentException.class, () -> config.fridaJudge(shortHttp));
+        assertNotNull(config.fridaJudge(defaults));
+    }
+
     // ---------------------------------------------------------------- токен внутреннего канала
 
     private static ServerHttpRequest request(String token) {
@@ -98,7 +112,10 @@ class InterviewWebLayerTest {
         var config = new InterviewConfig();
         var defaults = new InterviewProperties(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         InterviewKnowledge bundled = config.interviewKnowledge(defaults);
-        assertTrue(bundled.questions().length > 10);
+        assertEquals(50, bundled.questions().length);
+        assertEquals("Q001", bundled.questions()[0].question().stableId());
+        assertEquals("Q001-F01", bundled.questions()[0].question().followUpDetails().get(0).id());
+        assertFalse(bundled.questions()[0].question().followUpDetails().get(0).reference().isBlank());
 
         Path questions = dir.resolve("q.tsv");
         Files.writeString(questions, "Стажёр\tJava\tЧто такое JVM?\tВиртуальная машина Java\t\t\n", StandardCharsets.UTF_8);

@@ -10,7 +10,6 @@ import ru.sttplatform.diarization.session.SessionRegistry;
 import ru.sttplatform.gateway.config.GatewayProperties;
 import ru.sttplatform.stt.integration.IntegrationProperties;
 import ru.sttplatform.stt.transcript.InterviewAudioSpool;
-import ru.sttplatform.stt.vosk.SpeechSessionFactory;
 import ru.sttplatform.stt.whisper.WhisperClient;
 
 import java.nio.file.Files;
@@ -31,7 +30,7 @@ class TranscriptFinalizationTest {
 
     @Test void publishedFallbackKeepsTheOriginalRecording() throws Exception {
         var manager = new SessionManager(mock(SessionRegistry.class), new GatewayProperties(null, null, root.toString()),
-                mock(WhisperClient.class), mock(SpeechSessionFactory.class), mock(IntegrationProperties.class));
+                mock(WhisperClient.class), mock(IntegrationProperties.class));
         var constructor = Class.forName("ru.sttplatform.gateway.session.SessionManager$Active").getDeclaredConstructor(String.class);
         constructor.setAccessible(true);
         Object active = constructor.newInstance(UUID.randomUUID().toString());
@@ -50,7 +49,7 @@ class TranscriptFinalizationTest {
 
     @Test void reportFailureDoesNotHideSuccessfulTranscriptAndFailedPassDoesNotPublish() throws Exception {
         var manager = new SessionManager(mock(SessionRegistry.class), new GatewayProperties(null, null, root.toString()),
-                mock(WhisperClient.class), mock(SpeechSessionFactory.class), mock(IntegrationProperties.class));
+                mock(WhisperClient.class), mock(IntegrationProperties.class));
         var constructor = Class.forName("ru.sttplatform.gateway.session.SessionManager$Active").getDeclaredConstructor(String.class);
         constructor.setAccessible(true);
         String id = UUID.randomUUID().toString();
@@ -80,7 +79,7 @@ class TranscriptFinalizationTest {
 
     @Test void failedPublicationRecordsErrorAndKeepsAudio() throws Exception {
         var manager = new SessionManager(mock(SessionRegistry.class), new GatewayProperties(null, null, root.toString()),
-                mock(WhisperClient.class), mock(SpeechSessionFactory.class), mock(IntegrationProperties.class));
+                mock(WhisperClient.class), mock(IntegrationProperties.class));
         var constructor = Class.forName("ru.sttplatform.gateway.session.SessionManager$Active").getDeclaredConstructor(String.class);
         constructor.setAccessible(true);
         Object active = constructor.newInstance(UUID.randomUUID().toString());
@@ -136,7 +135,7 @@ class TranscriptFinalizationTest {
             }
 
             var manager = new SessionManager(mock(SessionRegistry.class), new GatewayProperties(null, null, root.toString()),
-                    client, mock(SpeechSessionFactory.class), mock(IntegrationProperties.class));
+                    client, mock(IntegrationProperties.class));
             var constructor = Class.forName("ru.sttplatform.gateway.session.SessionManager$Active").getDeclaredConstructor(String.class);
             constructor.setAccessible(true);
             Object active = constructor.newInstance(id);

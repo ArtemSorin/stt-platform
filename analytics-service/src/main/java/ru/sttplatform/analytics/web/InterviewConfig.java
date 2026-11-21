@@ -7,6 +7,8 @@ import ru.sttplatform.analytics.engine.DecisionPolicy;
 import ru.sttplatform.analytics.engine.Glossary;
 import ru.sttplatform.analytics.engine.InterviewKnowledge;
 import ru.sttplatform.analytics.engine.QuestionBank;
+import ru.sttplatform.analytics.engine.QuestionCatalog;
+import org.springframework.beans.factory.annotation.Value;
 import ru.sttplatform.analytics.engine.SpokenText;
 import ru.sttplatform.analytics.judge.FridaJudge;
 import ru.sttplatform.analytics.judge.JudgeProperties;
@@ -24,6 +26,8 @@ import java.nio.file.Path;
  */
 @Configuration
 public class InterviewConfig {
+    @Value("${interview.followups-path:}")
+    private String followupsPath = "";
 
     /**
      * Выполняет операцию публичного контракта компонента.
@@ -34,9 +38,16 @@ public class InterviewConfig {
      */
     @Bean
     public InterviewKnowledge interviewKnowledge(InterviewProperties p) throws IOException {
-        String tsv = load(p.questionsPath(), "interview/questions.tsv");
+        boolean bundled = (p.questionsPath() == null || p.questionsPath().isBlank()) && followupsPath.isBlank();
+        String tsv = load(p.questionsPath(), bundled ? "interview/team-questions.tsv" : "interview/questions.tsv");
         String glossary = load(p.glossaryPath(), "interview/glossary.txt");
-        InterviewKnowledge kb = InterviewKnowledge.build(QuestionBank.parse(tsv), Glossary.parse(glossary))
+        var questions = bundled
+                ? QuestionCatalog.toQuestions(QuestionCatalog.parse(tsv,
+                    load("", "interview/team-followups.tsv")))
+                : followupsPath.isBlank() ? QuestionBank.parse(tsv)
+                : QuestionCatalog.toQuestions(QuestionCatalog.parse(tsv,
+                    Files.readString(Path.of(followupsPath), StandardCharsets.UTF_8)));
+        InterviewKnowledge kb = InterviewKnowledge.build(questions, Glossary.parse(glossary))
                 .withSpoken(SpokenText.parse(load(p.spokenPath(), "interview/spoken.txt")));
         kb.warmUp(30);   // прогрев JIT: первое реальное решение не должно быть «холодным»
         return kb;
@@ -64,6 +75,9 @@ public class InterviewConfig {
      */
     @Bean
     public FridaJudge fridaJudge(JudgeProperties j) {
+        if (j.enabled() && (j.decisionDeadlineMs() != 8000 || j.requestTimeoutMs() < 8000)) {
+            throw new IllegalArgumentException("При включённой FRIDA ожидание решения должно быть 8000 мс, а HTTP-таймаут — не менее 8000 мс");
+        }
         return new FridaJudge(j);
     }
 

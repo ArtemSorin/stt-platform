@@ -10,7 +10,7 @@ async function request(path, body, headers = {}) {
   if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
   return data;
 }
-function showError(message) { $('error').textContent = message; $('error').classList.remove('hidden'); }
+function showError(message) { $('error').textContent = String(message).replace(/whisper/gi, 'итоговое распознавание'); $('error').classList.remove('hidden'); }
 function log(message) {
   const row = document.createElement('div');
   row.textContent = `${new Date().toLocaleTimeString()} · ${message}`;
@@ -104,7 +104,7 @@ function render(state) {
     ? `${integration.decision.action || 'Решение'} · ${integration.decision.reason || ''} · ${integration.decision.recognized || ''}`
     : integration.decision_retracted ? 'Решение отменено: ответ продолжается.' : 'Ожидание ответа';
   $('whisper-state').textContent = integration.refined?.text
-    ? `Уточнённый текст: ${integration.refined.text}` : `Состояние: ${integration.whisper_state || 'ожидание'}`;
+    ? `Уточнённый текст: ${integration.refined.text}` : `Состояние: ${String(integration.whisper_state || 'ожидание').replace(/whisper/gi, 'итоговое распознавание')}`;
   const question = integration.question;
   if (question) {
     const key = questionId(question);

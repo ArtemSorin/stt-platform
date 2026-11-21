@@ -89,6 +89,20 @@ public final class InterviewScorer {
             // счёт терминов и сленга по словарю — лексический и точный; модель добавляет оценку уместности
             if (ev != null && ev.terminology() != null) terminology = 0.5 * terminology + 0.5 * 10 * clamp(ev.terminology());
         }
+        // Основной результат и оценки фактически заданных уточнений имеют равный вес.
+        // Отсутствующие оценки не заменяются нулём: о сбое модели сообщает отчёт.
+        double completenessSum = completeness, technicalSum = technical, terminologySum = terminology;
+        int completenessCount = 1, technicalCount = 1, terminologyCount = 1;
+        for (Attempt a : r.attempts) {
+            Verdict followUp = a.answered ? a.followUpScoring : null;
+            if (followUp == null) continue;
+            if (followUp.completeness() != null) { completenessSum += 10 * clamp(followUp.completeness()); completenessCount++; }
+            if (followUp.correctness() != null) { technicalSum += 10 * clamp(followUp.correctness()); technicalCount++; }
+            if (followUp.terminology() != null) { terminologySum += 10 * clamp(followUp.terminology()); terminologyCount++; }
+        }
+        completeness = completenessSum / completenessCount;
+        technical = technicalSum / technicalCount;
+        terminology = terminologySum / terminologyCount;
         // скорость засчитывается пропорционально содержательности: быстрый «не знаю» — не достижение
         double speed = (speedSum / answered) * (0.3 + 0.7 * Math.min(1, R / 0.3));
         return new RunScore(completeness, technical, terminology, speed, R, words, hedge, answered, gloss, last, ev);

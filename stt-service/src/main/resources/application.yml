@@ -41,6 +41,7 @@ gateway:
   analytics-url: ${ANALYTICS_URL:http://127.0.0.1:8083}
   output-dir: ${GATEWAY_OUTPUT:./runs/integrated}
   audio-spool-dir: ${GATEWAY_AUDIO_SPOOL_DIR:}
+  # Экспериментальный итоговый анализ после полной транскрипции.
 
 integration:
   end-silence-ms: ${END_SILENCE_MS:450}

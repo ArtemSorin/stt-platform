@@ -34,6 +34,19 @@
 
     <build>
         <plugins>
+            <!-- Обычный JAR нужен только межсервисным тестам: исполняемый Spring Boot JAR остаётся прежним. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>integration-test-classes</id>
+                        <phase>process-classes</phase>
+                        <goals><goal>jar</goal></goals>
+                        <configuration><classifier>integration-test-classes</classifier></configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>

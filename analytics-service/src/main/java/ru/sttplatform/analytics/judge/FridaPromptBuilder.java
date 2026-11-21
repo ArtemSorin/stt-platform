@@ -90,10 +90,17 @@ public final class FridaPromptBuilder {
     public Map<String, Object> scoringRequest(JudgeInput in) {
         Map<String, Object> questions = new LinkedHashMap<>();
         addFacts(questions, in);
-        questions.put(COMPLETENESS, score("Оцени полноту ответа кандидата относительно эталона.", COMPLETENESS_LEVELS));
-        questions.put(CORRECTNESS, score("Оцени техническую точность ответа кандидата.", CORRECTNESS_LEVELS));
-        questions.put(TERMINOLOGY, score("Оцени владение профессиональной терминологией в ответе кандидата.", TERMINOLOGY_LEVELS));
+        questions.putAll(scoringRubric());
         return request(in, questions);
+    }
+
+    /** Формирует общий набор критериев итоговой оценки для запроса и снимка сценария. */
+    public static Map<String, Object> scoringRubric() {
+        Map<String, Object> rubric = new LinkedHashMap<>();
+        rubric.put(COMPLETENESS, score("Оцени полноту ответа кандидата относительно эталона.", COMPLETENESS_LEVELS));
+        rubric.put(CORRECTNESS, score("Оцени техническую точность ответа кандидата.", CORRECTNESS_LEVELS));
+        rubric.put(TERMINOLOGY, score("Оцени владение профессиональной терминологией в ответе кандидата.", TERMINOLOGY_LEVELS));
+        return rubric;
     }
 
     private Map<String, Object> request(JudgeInput in, Map<String, Object> questions) {

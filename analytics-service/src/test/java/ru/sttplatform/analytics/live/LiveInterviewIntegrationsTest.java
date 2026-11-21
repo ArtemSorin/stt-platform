@@ -88,9 +88,10 @@ class LiveInterviewIntegrationsTest {
     }
 
     @Test
-    void peek_by_model_uses_the_verdict_and_falls_back_on_errors_busy_model_or_unready_model() {
+    void peek_by_model_waits_before_fallback_on_errors_busy_model_or_unready_model() throws Exception {
         VirtualJudge judge = new VirtualJudge(0, MODEL_OK, false);
         SttSim sim = intern(judge);
+        sim.live.setJudge(judge, 80);
         sim.live.start();
         sim.ready();
 
@@ -98,15 +99,20 @@ class LiveInterviewIntegrationsTest {
         assertEquals("frida", sim.last("preview").get("engine"));
         assertEquals(1, judge.previewCalls);
 
-        judge.nullPreview = true;                                  // модель занята — мгновенная подсказка по правилам
+        judge.nullPreview = true;
         sim.live.onPeek(PARTIAL, "b");
+        assertEquals("a", sim.last("preview").get("requestId"));
+        Thread.sleep(150);
         assertEquals("rules", sim.last("preview").get("engine"));
+        assertEquals("b", sim.last("preview").get("requestId"));
 
         judge.nullPreview = false;
         judge.setReady(false);                                     // модель «выбита» — preview() даже не вызывается
         int calls = judge.previewCalls;
         sim.live.onPeek(PARTIAL, "c");
         assertEquals(calls, judge.previewCalls);
+        Thread.sleep(150);
+        assertEquals("c", sim.last("preview").get("requestId"));
         assertEquals("rules", sim.last("preview").get("engine"));
 
         // модель ответила ошибкой: подсказка всё равно приходит, но по правилам
@@ -119,11 +125,55 @@ class LiveInterviewIntegrationsTest {
             @Override public boolean ready() { return true; }
         };
         SttSim sim2 = intern(failing);
+        sim2.live.setJudge(failing, 80);
         sim2.live.start();
         sim2.ready();
         sim2.live.onPeek(PARTIAL, "d");
+        assertEquals(0, sim2.count("preview"));
+        Thread.sleep(150);
         assertEquals("rules", sim2.last("preview").get("engine"));
         assertEquals(1, sim2.count("preview"));
+    }
+
+    @Test
+    void preview_timeout_does_not_cancel_shared_model_request_and_old_result_is_ignored() throws Exception {
+        CompletableFuture<Verdict> shared = new CompletableFuture<>();
+        AnswerJudge model = new AnswerJudge() {
+            @Override public CompletableFuture<Verdict> decide(JudgeInput i) { return shared; }
+            @Override public CompletableFuture<Verdict> preview(JudgeInput i) { return shared; }
+            @Override public CompletableFuture<Verdict> score(JudgeInput i) { return new CompletableFuture<>(); }
+            @Override public boolean ready() { return true; }
+        };
+        SttSim sim = intern(model);
+        sim.live.setJudge(model, 80);
+        sim.live.start();
+        sim.ready();
+        sim.live.onPeek(PARTIAL, "old");
+        sim.live.onPeek(STRONG, "new");
+        Thread.sleep(150);
+        assertFalse(shared.isDone(), "таймаут подсказки не должен отменять общий запрос решения");
+        assertEquals(1, sim.count("preview"));
+        assertEquals("new", sim.last("preview").get("requestId"));
+        assertEquals("rules", sim.last("preview").get("engine"));
+        shared.complete(MODEL_OK);
+        assertEquals(1, sim.count("preview"));
+    }
+
+    @Test
+    void preview_uses_model_when_it_recovers_before_deadline() throws Exception {
+        VirtualJudge judge = new VirtualJudge(0, MODEL_OK, false);
+        SttSim sim = intern(judge);
+        sim.live.setJudge(judge, 2000);
+        judge.setReady(false);
+        sim.live.start();
+        sim.ready();
+        sim.live.onPeek(PARTIAL, "recover");
+        assertEquals(0, sim.count("preview"));
+        judge.setReady(true);
+        long until = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+        while (sim.count("preview") == 0 && System.nanoTime() < until) Thread.sleep(10);
+        assertEquals("frida", sim.last("preview").get("engine"));
+        assertEquals("recover", sim.last("preview").get("requestId"));
     }
 
     private static final Verdict MODEL_OK = new Verdict(List.of(new Verdict.Fact("факт", 0.9)), null, null,

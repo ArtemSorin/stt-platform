@@ -41,6 +41,7 @@ final class SttSim {
         if (timing != null) live.setTiming(timing);
         if (judge != null) live.setJudge(judge, deadlineMs);
         SttSim sim = new SttSim(live, events);
+        live.setDecisionClock(() -> java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(sim.nowMs));
         if (judge instanceof VirtualJudge vj) { sim.virtualJudge = vj; vj.bind(sim); }
         return sim;
     }
@@ -177,7 +178,7 @@ final class SttSim {
         private final long latencyMs;
         private final Verdict verdict;
         private final boolean fail;
-        private boolean ready = true;
+        private volatile boolean ready = true;
         final List<CompletableFuture<Verdict>> decideCalls = new ArrayList<>();
         final List<Long> requestedAt = new ArrayList<>();
         int scoreCalls, previewCalls;

@@ -118,6 +118,12 @@ public final class InterviewExcelReport {
                 k++;
                 fu.append("Уточнение ").append(k).append(": ").append(a.prompt()).append("\n→ ")
                         .append(a.answered() ? orDash(a.answer()) : "— нет ответа —");
+                var assessment = a.followUpScoring();
+                if (assessment != null) {
+                    fu.append("\nОценка уточнения: полнота ").append(scorePercent(assessment.completeness()))
+                            .append(", точность ").append(scorePercent(assessment.correctness()))
+                            .append(", терминология ").append(scorePercent(assessment.terminology()));
+                }
             }
             String said = conceptList(q.concepts(), true);
             String miss = conceptList(q.concepts(), false);
@@ -144,6 +150,10 @@ public final class InterviewExcelReport {
             s.colorScale(1, QC_COMP, last, QC_TOTAL, 0, 5, 10);
             s.colorScale(1, QC_COV, last, QC_COV, 0, 0.4, 1);
         }
+    }
+
+    private static String scorePercent(Double value) {
+        return value == null ? "—" : Math.round(value * 100) + "%";
     }
 
     // ================================================================== Сводка

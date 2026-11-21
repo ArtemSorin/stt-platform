@@ -39,13 +39,13 @@ public record JudgeProperties(Boolean enabled, String url, String protocol, Stri
         if (!protocol.equals("sidecar") && !protocol.equals("vllm"))
             throw new IllegalArgumentException("interview.judge.protocol: sidecar или vllm, а не " + protocol);
         if (model == null || model.isBlank()) model = "ai-forever/FRIDA-Decisions";
-        if (requestTimeoutMs == null) requestTimeoutMs = 4000;
+        if (requestTimeoutMs == null) requestTimeoutMs = 15000;
         if (scoreTimeoutMs == null) scoreTimeoutMs = 30000;
-        if (decisionDeadlineMs == null) decisionDeadlineMs = 1200;
+        if (decisionDeadlineMs == null) decisionDeadlineMs = 8000;
         if (maxStateChars == null) maxStateChars = 1800;
         if (previewEnabled == null) previewEnabled = true;
         if (breakerFailures == null) breakerFailures = 3;
-        if (breakerPauseMs == null) breakerPauseMs = 15000;
+        if (breakerPauseMs == null) breakerPauseMs = 1000;
         if (cacheSize == null) cacheSize = 128;
         if (ignoranceP == null) ignoranceP = 0.6;
         if (ignoranceMaxCoverage == null) ignoranceMaxCoverage = 0.25;
