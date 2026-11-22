@@ -20,8 +20,8 @@ public enum Level {
     /**
      * Преобразует русское или английское название уровня в значение перечисления.
      *
-     * @param s параметр операции
-     * @return результат операции
+     * @param s русское или английское название уровня
+     * @return соответствующий уровень вопроса
      */
     public static Level parse(String s) {
         String t = s.trim().toLowerCase().replace('ё', 'е');

@@ -283,18 +283,18 @@ public final class InterviewKnowledge {
     // ------------------------------------------------------------------ доступ
 
     /**
-     * Возвращает текущее значение без изменения состояния.
+     * Возвращает скомпилированные вопросы банка.
      *
-     * @return результат операции
+     * @return скомпилированные вопросы банка
      */
     public CompiledQuestion[] questions() {
         return compiled;
     }
 
     /**
-     * Возвращает текущее значение без изменения состояния.
+     * Возвращает скомпилированный вопрос по числовому идентификатору.
      *
-     * @param id параметр операции
+     * @param id числовой идентификатор вопроса
      * @return скомпилированный вопрос
      */
     public CompiledQuestion byId(int id) {
@@ -302,9 +302,9 @@ public final class InterviewKnowledge {
     }
 
     /**
-     * Возвращает текущее значение без изменения состояния.
+     * Возвращает анализатор ответов этого банка знаний.
      *
-     * @return результат операции
+     * @return анализатор ответов этого банка знаний
      */
     public AnswerAnalyzer analyzer() {
         return analyzer;
@@ -327,7 +327,7 @@ public final class InterviewKnowledge {
     /**
      * Присоединяет словарь произношения вопросов.
      *
-     * @param spoken параметр операции
+     * @param spoken словарь замен для произношения
      * @return подготовленный банк знаний
      */
     public InterviewKnowledge withSpoken(SpokenText spoken) {
@@ -336,29 +336,29 @@ public final class InterviewKnowledge {
     }
 
     /**
-     * Возвращает текущее значение без изменения состояния.
+     * Возвращает подпись элемента словаря по его индексу.
      *
-     * @param vocabId параметр операции
-     * @return строка результата
+     * @param vocabId индекс элемента словаря
+     * @return подпись элемента словаря по его индексу
      */
     public String label(int vocabId) {
         return label[vocabId];
     }
 
     /**
-     * Возвращает текущее значение без изменения состояния.
+     * Возвращает код типа элемента словаря по его индексу.
      *
-     * @param vocabId параметр операции
-     * @return результат операции
+     * @param vocabId индекс элемента словаря
+     * @return код типа элемента словаря по его индексу
      */
     public byte kindOf(int vocabId) {
         return kind[vocabId];
     }
 
     /**
-     * Возвращает текущее значение без изменения состояния.
+     * Возвращает размер словаря понятий.
      *
-     * @return целочисленное значение
+     * @return размер словаря понятий
      */
     public int vocabSize() {
         return vocabSize;
@@ -367,7 +367,7 @@ public final class InterviewKnowledge {
     /**
      * Прогрев JIT: прогоняем несколько «интервью», где ответом служит сам эталон.
      * Без прогрева первые вызовы в холодной JVM заметно медленнее.
-     * @param rounds параметр операции
+     * @param rounds число проходов по вопросам при прогреве
      */
     public void warmUp(int rounds) {
         DecisionPolicy policy = new DecisionPolicy(2, 0.08);

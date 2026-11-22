@@ -28,7 +28,7 @@ public class ReportController {
     private final ExcelReportService reports;
 
     /**
-     * Создаёт объект с указанными зависимостями и настройками.
+     * Создаёт контроллер скачивания сохранённых отчётов.
      *
      * @param reports сервис файлов отчётов
      */
@@ -40,7 +40,7 @@ public class ReportController {
      * Отдаёт XLSX только для допустимого существующего имени при разрешённом скачивании.
      *
      * @param name имя файла или сущности
-     * @return результат операции
+     * @return XLSX-файл либо HTTP 404, если отчёт недоступен
      */
     @GetMapping("/{name:.+}")
     public ResponseEntity<Resource> download(@PathVariable String name) {

@@ -34,7 +34,7 @@ public final class XlsxBook {
     private int sstRefs;
 
     /**
-     * Создаёт объект с указанными зависимостями и настройками.
+     * Создаёт книгу с начальными шрифтами и заливками Excel.
      */
     public XlsxBook() {
         fonts.put("false|false|11.0|000000", 0);   // шрифт по умолчанию

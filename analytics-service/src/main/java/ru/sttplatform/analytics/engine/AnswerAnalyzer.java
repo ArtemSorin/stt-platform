@@ -21,7 +21,7 @@ public final class AnswerAnalyzer {
     private final InterviewKnowledge kb;
 
     /**
-     * Создаёт объект с указанными зависимостями и настройками.
+     * Создаёт анализатор ответов на основе скомпилированного банка знаний.
      *
      * @param kb скомпилированный банк знаний
      */
@@ -30,10 +30,11 @@ public final class AnswerAnalyzer {
     }
 
     /**
+     * Анализирует ответ и обновляет признаки найденных понятий эталона.
      * @param hits накопительные флаги «понятие названо» (длина = poolSize); обновляются на месте
      * @param q скомпилированный вопрос
-     * @param text текст ответа или документа
-     * @return результат операции
+     * @param text текст ответа кандидата
+     * @return показатели покрытия и признаки ответа
      */
     public AnswerAnalysis analyze(CompiledQuestion q, CharSequence text, boolean[] hits) {
         Ws ws = WS.get();

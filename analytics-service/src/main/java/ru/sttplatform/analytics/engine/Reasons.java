@@ -7,10 +7,10 @@ public final class Reasons {
     private Reasons() {}
 
     /**
-     * Выполняет операцию публичного контракта компонента.
+     * Преобразует код причины в пояснение для отчёта.
      *
-     * @param reason параметр операции
-     * @return строка результата
+     * @param reason код причины решения; может быть {@code null}
+     * @return русская подпись, исходный неизвестный код или пустая строка при {@code null}
      */
     public static String text(String reason) {
         if (reason == null) return "";
@@ -29,10 +29,10 @@ public final class Reasons {
     }
 
     /**
-     * Выполняет операцию публичного контракта компонента.
+     * Преобразует код действия интервью в подпись для отчёта.
      *
-     * @param action параметр операции
-     * @return строка результата
+     * @param action код действия; может быть {@code null}
+     * @return русская подпись, исходный неизвестный код или пустая строка при {@code null}
      */
     public static String action(String action) {
         if (action == null) return "";

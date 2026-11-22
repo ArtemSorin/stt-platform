@@ -37,10 +37,10 @@ public record XlsxStyle(boolean bold, boolean italic, double size, String color,
     }
 
     /**
-     * Возвращает текущее значение без изменения состояния.
+     * Возвращает новый стиль с указанным размером шрифта.
      *
-     * @param v параметр операции
-     * @return тот же объект для последовательной настройки
+     * @param v размер шрифта в пунктах
+     * @return новый стиль с указанным размером шрифта
      */
     public XlsxStyle size(double v) {
         return new XlsxStyle(bold, italic, v, color, fill, border, halign, valign, wrap, numFmt);

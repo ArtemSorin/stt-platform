@@ -8,6 +8,7 @@ let enrollmentStartedAt = 0, enrollmentTimer, enrollmentFinishing = false;
 let startTime = 0, polling = false, currentQuestionKey = '', scheduledQuestionKey = '', questionTimer;
 let lastDecision = '', lastPreviewKey = '', lastPreviewId = '', lastReportSignature = '', eventLines = [];
 let voices = [], activeQuestion = null, questionBlocked = false, questionRetracted = false;
+// Поколение отсеивает запоздавшие события отменённой озвучки и предыдущего интервью.
 let ttsGeneration = 0, ttsWatchdog, questionReady = false, ttsInProgress = false, ttsManualRequired = false;
 let voiceRotationStartId = '';
 const questionVoiceAssignments = new Map();
@@ -182,6 +183,7 @@ function render(status) {
     $('asked').disabled = phase !== 'live' || questionBlocked || questionReady || ttsInProgress;
     $('skip').disabled = phase !== 'live' || questionBlocked || ttsInProgress;
     if (integration.question_pending) {
+      // Переход подтверждается по обработанному аудио, а не по настенным часам браузера.
       clearTimeout(questionTimer);
       $('asked').disabled = true; $('skip').disabled = true;
       $('tts-state').textContent = 'Проверяем окончание ответа кандидата.';
@@ -288,6 +290,7 @@ function speakQuestion(question, key) {
   const manualRecovery = () => {
     if (done || generation !== ttsGeneration || currentQuestionKey !== key || mode !== 'live') return;
     done = true; clearTimeout(ttsWatchdog); ttsInProgress = false; ttsManualRequired = true;
+    // Без события завершения TTS нельзя автоматически считать вопрос заданным.
     speechSynthesis.cancel();
     $('tts-state').textContent = 'Не удалось завершить озвучку. Задайте вопрос и подтвердите вручную.';
     $('asked').hidden = false; $('asked').disabled = false; $('skip').disabled = false;

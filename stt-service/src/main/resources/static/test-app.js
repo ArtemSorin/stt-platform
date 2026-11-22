@@ -2,6 +2,7 @@ const $ = id => document.getElementById(id);
 let stream, context, source, worklet, sessionId;
 let mode = 'idle', captureEnabled = false, sequence = 0, pending = Promise.resolve();
 let polling = false, questionKey = '', scheduledQuestion = '', questionTimer, finishRequested = false, stopResolver;
+// Позднее событие старой озвучки не должно открывать новую попытку ответа.
 let ttsGeneration = 0, ttsWatchdog;
 
 async function request(path, body, headers = {}) {

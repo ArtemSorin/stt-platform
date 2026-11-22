@@ -25,7 +25,7 @@ public class ExcelReportService implements ReportExporter {
     private final boolean download;
 
     /**
-     * Создаёт объект с указанными зависимостями и настройками.
+     * Настраивает каталог отчётов и доступность скачивания.
      *
      * @param props настройки приложения
      */
@@ -38,8 +38,8 @@ public class ExcelReportService implements ReportExporter {
      * Сохраняет новый XLSX и формирует ссылку, если скачивание разрешено.
      *
      * @param details данные завершённого интервью
-     * @return результат операции
-     * @throws Exception если операция или подключённый сервис завершились ошибкой
+     * @return имя и путь сохранённого файла и, если разрешено, ссылку для скачивания
+     * @throws Exception если не удалось сформировать или сохранить XLSX
      */
     @Override
     public Result export(InterviewDetails details) throws Exception {

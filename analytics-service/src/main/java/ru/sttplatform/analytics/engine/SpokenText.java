@@ -27,9 +27,9 @@ public final class SpokenText {
     private final Map<String, String> dict;
 
     /**
-     * Создаёт объект с указанными зависимостями и настройками.
+     * Создаёт преобразователь произношения по словарю замен.
      *
-     * @param dict параметр операции
+     * @param dict словарь исходных терминов и их произношения
      */
     public SpokenText(Map<String, String> dict) {
         this.dict = dict;
@@ -55,8 +55,8 @@ public final class SpokenText {
     /**
      * Подставляет произношение технических терминов для TTS.
      *
-     * @param text текст ответа или документа
-     * @return строка результата
+     * @param text исходный текст для озвучивания
+     * @return текст с заменами для произношения
      */
     public String speak(String text) {
         return process(text, null);
