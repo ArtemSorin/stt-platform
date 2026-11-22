@@ -2,6 +2,17 @@
   <configuration default="false" name="analytics-service" type="SpringBootApplicationConfigurationType" factoryName="Spring Boot">
     <module name="analytics-service" />
     <option name="SPRING_BOOT_MAIN_CLASS" value="ru.sttplatform.analytics.AnalyticsServiceApplication" />
+    <option name="WORKING_DIRECTORY" value="file://$PROJECT_DIR$/analytics-service" />
+    <envs>
+      <env name="JUDGE_ENABLED" value="true" />
+      <env name="JUDGE_AUTOSTART" value="true" />
+      <env name="JUDGE_PYTHON" value="$PROJECT_DIR$/.venv-frida/Scripts/python.exe" />
+      <env name="JUDGE_SCRIPT" value="$PROJECT_DIR$/analytics-service/judge/frida_server.py" />
+      <env name="JUDGE_DEVICE" value="cpu" />
+      <env name="INTERVIEW_JUDGE_DECISION_DEADLINE_MS" value="8000" />
+      <env name="INTERVIEW_JUDGE_REQUEST_TIMEOUT_MS" value="15000" />
+      <env name="PYTHONUTF8" value="1" />
+    </envs>
     <option name="VM_PARAMETERS" value="-Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8 -Xmx512m" />
     <method v="2">
       <option name="Make" enabled="true" />

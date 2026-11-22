@@ -21,7 +21,7 @@
 | Vosk → STT | `partial` / `final` | `{type, text, words:[{word,start,end,confidence}]}`; времена слов относятся к текущему потоку. |
 | Vosk → STT | `stats` | `{type:"stats", rtf}` примерно каждые 20 кадров. |
 
-В основном режиме два Vosk-потока: общий используется для таймлайна, а поток кандидата — для текста и VAD аналитики. В тестовом режиме диаризации нет, поэтому весь микрофонный сигнал считается речью кандидата.
+В основном двухканальном режиме два Vosk-потока используют только системный звук: один — для таймлайна, другой — для текста и VAD аналитики кандидата. Микрофон записывается для итогового Whisper и в live Vosk или диаризацию не передаётся. В тестовом режиме диаризации нет, поэтому весь микрофонный сигнал считается речью кандидата.
 
 ## Закрытый канал STT → аналитика: `ws://127.0.0.1:8083/ws/interview-events`
 
@@ -41,10 +41,13 @@ Handshake требует заголовок `X-Internal-Token`. В обоих п
 | `tts_end` | `afterMs`, `audioEndSample` | Зафиксировать конец озвучки и поправить измерение времени ответа. |
 | `skip` | `audioStartSample`, `audioEndSample` | Пропустить вопрос. |
 | `peek` | `text`, `requestId`, `audioStartSample`, `audioEndSample` | Запросить предварительную подсказку без изменения состояния интервью. |
-| `frame` | `text`, `asrType`, `samples`, `rms`, `asrMs`, `vadState`, `audioMs`, `speechStartMs`, `speechDurationMs`, `silenceMs`, `audioStartSample`, `audioEndSample` | Передать распознанный текст и состояние детектора конца речи. PCM не передаётся. |
-| `refined` | `answerId`, `text`, `words`, `audioStartSample`, `audioEndSample` | Передать уточнение Whisper для принятого ответа. |
-| `refine_done` | `answerId`, необязательный `error` | Завершить ожидание уточнения, даже если Whisper пропущен или завершился ошибкой. |
-| `stop` | `audioEndSample` | Завершить интервью и запросить итоговый отчёт. |
+| `frame` | `text`, `asrType`, `samples`, `rms`, `asrMs`, `vadState`, `audioMs`, `speechStartMs`, `speechDurationMs`, `silenceMs`, `audioStartSample`, `audioEndSample` | Передать снимок текста кандидата из системного Vosk и состояние детектора конца речи. `asrType=snapshot`; PCM не передаётся. |
+| `prepare_final` | `audioEndSample` | Завершить live-этап перед обработкой полной записи. |
+| `final_answer` | `attemptId`, `answerId`, `questionId`, `followUpId`, `text`, `source`, `transcriptIncomplete` | Передать итоговый текст для одного принятого ответа; повтор и неверные идентификаторы отклоняются. |
+| `stop` | `audioEndSample`, `transcriptSource` | Завершить итоговую оценку и запросить отчёт. |
+
+Источник итогового текста: `whisper` — распознавание записи, `mixed` — результат с резервными словами Vosk или отмеченными пропусками, `vosk` — полный резерв. Если в записи есть непокрытый участок микрофона, он помечается как нераспознанный: live Vosk этот канал не обрабатывает.
+| `refined`, `refine_done` | `answerId` и данные уточнения | Сообщения прежнего режима с live Whisper при отключённой отложенной финализации. |
 
 ### Аналитика → STT
 
@@ -56,9 +59,11 @@ Handshake требует заголовок `X-Internal-Token`. В обоих п
 | `question` | данные вопроса и перехода | Вопрос, который нужно показать или озвучить. |
 | `partial` | `text` | Текущая гипотеза ответа. |
 | `preview` / `preview_retract` | текст и оценка подсказки / причина отмены | Предварительная подсказка без фиксации решения. |
-| `decision` | `answerId`, `action`, `reason`, `recognized`, оценка и тайминги | Принятое решение. STT связывает уже отправленные части Whisper с `answerId`. |
+| `decision` | `answerId`, `action`, `reason`, `recognized`, оценка и тайминги | Принятое решение, связываемое в журнале с интервалом ответа. |
 | `retract` | `reason`, при наличии восстановленный `question` | Отменить решение, если кандидат продолжил говорить в окне отмены. |
 | `finalizing` | сообщение | Аналитика формирует отчёт или ждёт уточнение. |
+| `scenario_rubric`, `scenario_question`, `scenario_followup` | критерии и снимок вопросов и уточнений | Закрытый снимок сценария для журнала; браузеру не пересылается. |
+| `finalization_ready` | позиция и идентификаторы сессии | Live-этап завершён, можно обрабатывать журнал и запись. |
 | `refined`, `whisper_error`, `judge_error` | `answerId`, текст или сообщение | Результат повторного распознавания или диагностика. |
 | `report` | данные итогового отчёта | Завершённое интервью. |
 | `error` | `message` | Ошибка протокола или аналитики. |
@@ -81,18 +86,17 @@ sequenceDiagram
         S->>V: общий звук и подтверждённые кадры кандидата
         S->>A: frame (текст, VAD, позиции, sequence)
         A-->>S: partial / preview
-        opt Накоплено 30 секунд и Whisper включён
-            S->>W: PCM очередной части ответа
-            W-->>S: слова части
-        end
     end
     A-->>S: decision (answerId)
-    opt Whisper включён
-        S->>W: оставшаяся часть ответа
-        W-->>S: слова последней части
-        S->>A: refined / refine_done (answerId)
-    end
-    A-->>S: question или report
+    A-->>S: следующий question
+    B->>S: остановка интервью
+    S->>A: prepare_final
+    A-->>S: finalization_ready
+    S->>W: полная запись по каналам
+    W-->>S: слова с временными метками
+    S->>A: final_answer для каждого ответа
+    S->>A: stop
+    A-->>S: report
 ```
 
 Пропуск номера `sequence`, неверный `sessionId`/`attemptId`, бинарное сообщение или потеря соединения закрывают канал и завершают мост с явной ошибкой. Переполнение аудиоочереди останавливает сессию; кадры не теряются молча. Если решение отменено, STT игнорирует поздний результат Whisper с этим `answerId`.

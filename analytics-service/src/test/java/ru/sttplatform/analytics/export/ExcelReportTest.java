@@ -129,6 +129,21 @@ class ExcelReportTest {
     }
 
     @Test
+    void candidate_text_starting_with_formula_markers_is_stored_as_text() throws Exception {
+        var session = new InterviewSession(TestKb.single(), List.of(Level.INTERN), new DecisionPolicy(0, 0.08));
+        session.start();
+        String answer = "=HYPERLINK(\"https://example.invalid\",\"открыть\")";
+        session.submit(answer, answer, new AnswerTiming(100, 1000));
+        var parts = unzip(InterviewExcelReport.build(session.details("Кандидат", Instant.now(), Map.of())));
+        String strings = new String(parts.get("xl/sharedStrings.xml"), StandardCharsets.UTF_8);
+        assertTrue(strings.contains("=HYPERLINK"));
+        for (var part : parts.entrySet()) {
+            if (!part.getKey().startsWith("xl/worksheets/sheet")) continue;
+            assertFalse(new String(part.getValue(), StandardCharsets.UTF_8).contains("<f>HYPERLINK"));
+        }
+    }
+
+    @Test
     void russian_plurals_and_row_height_helpers() {
         assertEquals("слово", InterviewExcelReport.plural(1, "слово", "слова", "слов"));
         assertEquals("слова", InterviewExcelReport.plural(3, "слово", "слова", "слов"));

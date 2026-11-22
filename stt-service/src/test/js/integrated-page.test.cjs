@@ -69,18 +69,35 @@ test('question waits out grace and browser TTS owns the handoff to answer mode',
   assert.equal(element('report-total').textContent, '7,5 / 10');
   assert.equal(element('report-verdict').textContent, 'Хорошо');
   assert.match(element('report-counts').textContent, /2 из 2 вопросов/);
+  context.renderForTest({phase:'finished', integration:{report_transcript_source:'vosk_fallback', report_scoring_incomplete:true, report_transcript_incomplete:true, report_references_missing:true, report:{
+    total:7.5, verdict:'Хорошо', answeredQuestions:2, plannedQuestions:2, questions:[]
+  }}});
+  assert.match(element('report-counts').textContent, /резервной транскрипции Vosk/);
+  assert.match(element('report-counts').textContent, /Оценка FRIDA неполная/);
+  assert.match(element('report-counts').textContent, /спорные или нераспознанные участки/);
+  assert.match(element('report-counts').textContent, /Нет эталонов для части уточнений/);
+  const counts = element('report-counts').textContent;
+  context.renderForTest({phase:'finished', integration:{report_transcript_source:'vosk_fallback', report_scoring_incomplete:true, report_transcript_incomplete:true, report_references_missing:true, report:{
+    total:7.5, verdict:'Хорошо', answeredQuestions:2, plannedQuestions:2, questions:[]
+  }}});
+  assert.equal(element('report-counts').textContent, counts);
+  context.renderForTest({phase:'finished', integration:{excel:{file:'interview.xlsx',url:'/api/reports/interview.xlsx'},report:{
+    total:7.5, verdict:'Хорошо', answeredQuestions:2, plannedQuestions:2,
+    completeness:7, technical:8, terminology:6, speed:9,
+    questions:[{number:1, topic:'Java Core', question:'Что такое JVM?', attempts:1,
+      coveragePercent:80, completeness:8, technical:7, missing:['JRE']}]
+  }}});
   assert.equal(element('report-questions').children.length, 1);
   assert.match(element('report-questions').children[0].children[0].textContent, /Java Core/);
 
   context.renderForTest({phase:'live', integration:{
-    timeline_words:[{word:'кандидат', role:'Кандидат', role_status:'confirmed', source:'system'},
-      {word:'интервьюер', role:'Интервьюер 1', role_status:'confirmed', source:'microphone'}],
-    channel_partials:{system:'текст кандидата', microphone:'текст интервьюера'},
+    timeline_words:[{word:'кандидат', role:'Кандидат', role_status:'confirmed', source:'system'}],
+    channel_partials:{system:'текст кандидата'},
     candidate_warning:'Роль не подтверждена'
   }});
   const rows = element('transcript').children;
   assert.equal(rows[0].children[0].textContent, 'Кандидат: ');
-  assert.equal(rows[2].children[0].textContent, 'Интервьюер 1: ');
-  assert.match(element('partial').textContent, /текст кандидата.*текст интервьюера/);
+  assert.match(element('partial').textContent, /текст кандидата/);
+  assert.doesNotMatch(element('partial').textContent, /Интервьюер/);
   assert.equal(element('error').textContent, 'Роль не подтверждена');
 });

@@ -114,7 +114,7 @@ public final class InterviewWebSocketHandler extends AbstractWebSocketHandler {
                 if (attemptId != session.currentAttemptId + 1)
                     throw new IllegalStateException("Неверный attemptId для нового ответа: " + attemptId);
                 session.currentAttemptId = attemptId;
-            } else if ("refined".equals(type) || "refine_done".equals(type)) {
+            } else if ("refined".equals(type) || "refine_done".equals(type) || "final_answer".equals(type)) {
                 int answerId = data.path("answerId").asInt(-1);
                 Long expectedAttempt = session.answerAttempts.get(answerId);
                 if (expectedAttempt == null || expectedAttempt != attemptId)
@@ -131,7 +131,15 @@ public final class InterviewWebSocketHandler extends AbstractWebSocketHandler {
                 case "ready" -> session.live.onReady();
                 case "tts_end" -> session.live.onTtsEnd(data.path("afterMs").asLong(0));
                 case "skip" -> session.live.onSkip();
-                case "stop" -> session.live.onStop();
+                case "stop" -> {
+                    if (data.hasNonNull("transcriptSource")) session.live.onFinalSource(data.path("transcriptSource").asText());
+                    session.live.onStop();
+                }
+                case "prepare_final" -> session.live.onPrepareFinal();
+                case "final_answer" -> session.live.onFinalAnswer(data.path("answerId").asInt(-1),
+                        data.path("questionId").asText(""), data.hasNonNull("followUpId") ? data.path("followUpId").asText() : null,
+                        data.path("text").asText(null), data.path("source").asText(""),
+                        data.path("transcriptIncomplete").asBoolean(false));
                 case "peek" -> session.live.onPeek(data.path("text").asText(""), data.path("requestId").asText(""));
                 case "frame" -> session.live.onSttFrame(data.path("asrType").asText(""),
                         data.path("text").asText(""), data.path("samples").asInt(0),
@@ -184,22 +192,27 @@ public final class InterviewWebSocketHandler extends AbstractWebSocketHandler {
                     Active current = holder[0];
                     if (current != null) sendSession(ws, current, event);
                 });
-        live.setJudge(judge, judgeProps.decisionDeadlineMs());
+        live.setJudge(judgeProps.enabled() ? judge : null, judgeProps.decisionDeadlineMs());
+        live.setDeferredFinalReport(data.path("deferredFinalReport").asBoolean(false));
         live.setTiming(new LiveInterview.Timing(properties.nextExtraMs(), properties.otherNextExtraMs(),
                 properties.followUpExtraMs(), properties.graceMs()));
         boolean whisperOn = data.path("whisperEnabled").asBoolean(false);
-        live.setRefinementWait(whisperOn ? properties.whisperWaitMs() : 0);
+        live.setRefinementWait(whisperOn || data.path("deferredFinalReport").asBoolean(false)
+                ? properties.whisperWaitMs() : 0);
         boolean testMode = data.path("testMode").asBoolean(false);
-        live.setExport(reports, data.path("candidate").asText(""), settings(whisperOn, testMode));
+        // ready() проверяет только состояние клиента; отдельно проверяем доступность sidecar при старте.
+        boolean judgeAvailable = judge.ready() && ("vllm".equals(judgeProps.protocol())
+                || !judge.serverStatus().containsKey("error"));
+        live.setExport(reports, data.path("candidate").asText(""), settings(whisperOn, testMode, judgeAvailable));
         Active session = new Active(live, speech, sessionId);
         holder[0] = session;
         active.put(ws.getId(), session);
         live.start();
         sendSession(ws, session, Map.of("type", "service_status", "whisper", whisperOn ? "configured" : "disabled",
-                "judge", judge.ready() ? "frida" : "rules"));
+                "judge", judgeAvailable ? "frida" : "rules"));
     }
 
-    private Map<String, String> settings(boolean whisperOn, boolean testMode) {
+    private Map<String, String> settings(boolean whisperOn, boolean testMode, boolean judgeAvailable) {
         Map<String, String> settings = new LinkedHashMap<>();
         settings.put("Распознавание речи", testMode ? "Vosk; тестовый режим без диаризации (весь микрофон — кандидат)"
                 : "Vosk + диаризация в stt-service");
@@ -208,7 +221,7 @@ public final class InterviewWebSocketHandler extends AbstractWebSocketHandler {
         settings.put("Порог тишины", properties.endSilenceMs() + " мс");
         settings.put("Окно отмены решения", properties.graceMs() + " мс");
         settings.put("Макс. уточнений", String.valueOf(properties.maxFollowUps()));
-        settings.put("Анализ ответов", judge.ready() ? "FRIDA-Decisions с резервными правилами" : "правила на ключевых словах");
+        settings.put("Анализ ответов", judgeAvailable ? "FRIDA-Decisions с резервными правилами" : "правила на ключевых словах");
         return settings;
     }
 
@@ -219,7 +232,10 @@ public final class InterviewWebSocketHandler extends AbstractWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession ws, CloseStatus status) {
         Active session = active.remove(ws.getId());
-        if (session != null) session.speech.close();
+        if (session != null) {
+            session.live.close();
+            session.speech.close();
+        }
     }
 
     /** Записывает транспортную ошибку внутреннего WebSocket-канала.

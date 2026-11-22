@@ -18,6 +18,13 @@
             <artifactId>common</artifactId>
         </dependency>
         <dependency>
+            <groupId>ru.sttplatform</groupId>
+            <artifactId>analytics-service</artifactId>
+            <version>${project.version}</version>
+            <classifier>integration-test-classes</classifier>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>

@@ -33,11 +33,11 @@
   window.transcriptView = {
     update(phase, value, error, id, progress) {
       if (value && id) ready(id, value);
-      else if (error) { panel.hidden = false; actions.hidden = true; el('transcript-result-state').textContent = error; }
+      else if (error) { panel.hidden = false; actions.hidden = true; el('transcript-result-state').textContent = String(error).replace(/whisper/gi, 'итоговое распознавание'); }
       else if (phase === 'stopping') {
         panel.hidden = false; actions.hidden = true;
         el('transcript-result-state').textContent = progress
-          ? `Whisper обрабатывает запись: ${progress.done} из ${progress.total} каналов.`
+          ? `Обрабатываем запись: ${progress.done} из ${progress.total} каналов.`
           : 'Готовим полную транскрипцию после интервью.';
       }
       else if (phase === 'live' || phase === 'enrolling' || phase === 'preparing') {

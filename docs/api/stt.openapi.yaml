@@ -167,7 +167,7 @@ paths:
         - $ref: '#/components/parameters/Sequence'
       requestBody:
         required: true
-        description: PCM16 little-endian, 16 кГц; чередуются системный сэмпл и сэмпл микрофона. До 0,64 с на каждый канал.
+        description: PCM16 little-endian, 16 кГц; чередуются системный сэмпл и сэмпл микрофона. До 0,64 с на каждый канал. В live Vosk и диаризацию поступает системный канал; микрофон сохраняется для итоговой транскрипции Whisper.
         content:
           application/octet-stream:
             schema: {type: string, format: binary}

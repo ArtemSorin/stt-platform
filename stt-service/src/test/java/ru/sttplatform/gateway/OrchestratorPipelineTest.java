@@ -73,7 +73,7 @@ class OrchestratorPipelineTest {
         factory = mock(SpeechSessionFactory.class);
         when(factory.create()).thenReturn(speech);
 
-        orchestrator = new Orchestrator(dir, stt.httpUrl(), analytics.httpUrl(), "s1", false, factory,
+        orchestrator = new Orchestrator(dir, stt.httpUrl(), analytics.httpUrl(), "s1", false,
                 new IntegrationProperties(null, null), null, true, "Иван");
     }
 
@@ -101,6 +101,16 @@ class OrchestratorPipelineTest {
             orchestrator.submit(nextSample, frame);
             nextSample += frame.length / 2;
         }
+    }
+
+    /** Единственный live Vosk присылает слова с временными метками; второго локального ASR нет. */
+    private void sendSystemWords() throws Exception {
+        stt.awaitConnection(0, 3000).sendText(Json.write(Json.map("type", "final", "text", partialText,
+                "words", List.of(Json.map("word", "джей", "start", .2, "end", .3),
+                        Json.map("word", "ви", "start", .3, "end", .4),
+                        Json.map("word", "эм", "start", .4, "end", .5),
+                        Json.map("word", "это", "start", .5, "end", .6),
+                        Json.map("word", "машина", "start", .6, "end", .7)))));
     }
 
     private void sendFromAnalytics(Map<String, Object> event) throws Exception {
@@ -137,6 +147,59 @@ class OrchestratorPipelineTest {
     // ---------------------------------------------------------------- тесты
 
     @Test
+    void separate_channels_open_only_one_live_stt_connection_and_send_system_audio() throws Exception {
+        try (var separateStt = new MiniWsServer(); var separateAnalytics = new MiniWsServer()) {
+            try (var separate = new Orchestrator(dir.resolve("separate"), separateStt.httpUrl(),
+                    separateAnalytics.httpUrl(), "separate", false,
+                    new IntegrationProperties(null, null), null, false, "", true)) {
+                byte[] system = {1, 2, 3, 4};
+                byte[] microphone = {11, 12, 13, 14};
+                separate.submitChannels(0, system, microphone);
+                var connection = separateStt.awaitConnection(0, 3000);
+                assertTrue(await(() -> !connection.binaries.isEmpty(), 3000));
+                assertArrayEquals(system, connection.binaries.get(0));
+                assertEquals(1, separateStt.connections.size(), "микрофон не открывает соединение с Vosk");
+            }
+        }
+    }
+
+    @Test
+    void writes_question_and_ready_events_to_session_journal() throws Exception {
+        assertTrue(await(() -> firstOfType("start") != null, 3000));
+        push("question", "questionId", "Q1", "graceMs", 0, "text", "Что такое JVM?", "followUp", false);
+        assertTrue(await(() -> orchestrator.status().get("question") != null, 3000));
+        orchestrator.questionAsked();
+        assertTrue(await(() -> firstOfType("ready") != null, 3000));
+        orchestrator.close();
+        var lines = java.nio.file.Files.readAllLines(dir.resolve("interview-events.jsonl"));
+        assertEquals(2, lines.size());
+        var q = Json.MAPPER.readTree(lines.get(0));
+        var ready = Json.MAPPER.readTree(lines.get(1));
+        assertEquals("question_issued", q.path("type").asText());
+        assertEquals("Q1", q.path("questionId").asText());
+        assertEquals("ready", ready.path("type").asText());
+        assertEquals("Q1", ready.path("questionId").asText());
+        assertEquals(1, ready.path("attemptId").asInt());
+        assertEquals(1, ready.path("eventSequence").asInt());
+    }
+
+    @Test
+    void scenario_reference_is_journaled_without_exposing_it_in_status() throws Exception {
+        assertTrue(await(() -> firstOfType("start") != null, 3000));
+        push("scenario_rubric", "criteria", Map.of("completeness", Map.of("instructions", "критерий")));
+        push("scenario_question", "questionId", "Q1", "reference", "эталон-секрет", "text", "Вопрос");
+        push("question", "questionId", "Q1", "text", "Вопрос", "graceMs", 0);
+        assertTrue(await(() -> orchestrator.status().get("question") != null, 3000));
+        assertFalse(Json.write(orchestrator.status()).contains("эталон-секрет"));
+        orchestrator.close();
+        String journal = java.nio.file.Files.readString(dir.resolve("interview-events.jsonl"));
+        assertTrue(journal.contains("эталон-секрет"));
+        assertTrue(journal.contains("scenario_question"));
+        assertTrue(journal.contains("scenario_rubric"));
+        assertTrue(journal.contains("критерий"));
+    }
+
+    @Test
     void connects_to_both_services_and_announces_the_session() throws Exception {
         assertTrue(await(() -> firstOfType("start") != null, 3000));
         JsonNode start = firstOfType("start");
@@ -161,6 +224,9 @@ class OrchestratorPipelineTest {
         assertEquals(1, ready.path("sequence").asInt());
 
         feed(new byte[FRAME_BYTES], 4);                      // 200 мс тишины
+        sendSystemWords();
+        assertTrue(await(() -> partialText.equals(orchestrator.status().get("mixed_transcript")), 3000),
+                "тестовые слова Vosk должны попасть в общую временную шкалу до подачи речи");
         feed(voiced(), 30);                                  // 1,5 с речи
         long silenceStart = System.nanoTime();
         feed(new byte[FRAME_BYTES], 12);                     // 600 мс тишины → мягкий конец на 450 мс
@@ -181,12 +247,11 @@ class OrchestratorPipelineTest {
         }
         JsonNode endpoint = frames.stream().filter(f -> "ENDPOINT".equals(f.path("vadState").asText())).findFirst().orElseThrow();
         assertTrue(endpoint.path("silenceMs").asLong() >= 450);
-        assertEquals("final", endpoint.path("asrType").asText(), "на конце ответа Vosk «дожимается» до final");
-        assertEquals(partialText, endpoint.path("text").asText());
+        assertEquals("snapshot", endpoint.path("asrType").asText(), "текст берётся из общего Vosk без второго распознавания");
+        assertTrue(endpoint.path("text").asText().contains("джей"));
         assertEquals(800, endpoint.path("samples").asInt());
         assertTrue(frames.stream().anyMatch(f -> "SPEAKING".equals(f.path("vadState").asText())));
-        assertTrue(frames.stream().anyMatch(f -> "partial".equals(f.path("asrType").asText())));
-        verify(factory, times(2)).create();                  // при старте потока и при «ready»
+        verifyNoInteractions(factory);                       // второго локального Vosk больше нет
     }
 
     @Test
@@ -255,11 +320,10 @@ class OrchestratorPipelineTest {
     void finishing_flushes_the_recognizer_and_closes_the_stt_stream() throws Exception {
         provideQuestion();
         orchestrator.questionAsked();
+        sendSystemWords();
         feed(voiced(), 10);
         orchestrator.finish(0.5, List.of());
         orchestrator.finish(0.5, List.of());                 // повторный вызов безопасен
-        assertTrue(await(() -> allOfType("frame").stream().anyMatch(f -> f.path("samples").asInt() == 0), 5000),
-                "завершающий кадр с остатком распознавания");
         assertTrue(stt.connections.get(0).texts.contains("eof"));
         assertNotNull(firstOfType("stop"));
         assertNull(orchestrator.status().get("bridge_error"));
@@ -279,7 +343,7 @@ class OrchestratorPipelineTest {
     @Test
     void connection_failure_is_reported_with_a_clear_message() {
         var e = assertThrows(IllegalStateException.class, () -> new Orchestrator(dir.resolve("x"),
-                "http://127.0.0.1:1", analytics.httpUrl(), "s2", false, factory, new IntegrationProperties(null, null), null, true));
+                "http://127.0.0.1:1", analytics.httpUrl(), "s2", false, new IntegrationProperties(null, null), null, true));
         assertTrue(e.getMessage().contains("Не удалось подключиться к stt-service"));
     }
 

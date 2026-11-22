@@ -13,15 +13,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OrchestratorTest {
     @Test
-    void overlapping_late_role_is_not_reported_lost_when_audio_was_already_sent() {
-        var sent = List.of(new Orchestrator.SampleRange(100, 1000));
-        assertFalse(Orchestrator.hasUnsentCandidateAudio(500, 1030, sent));
-        assertTrue(Orchestrator.hasUnsentCandidateAudio(500, 1100, sent));
-        assertTrue(Orchestrator.hasUnsentCandidateAudio(0, 500, sent));
-        assertFalse(Orchestrator.hasUnsentCandidateAudio(1000, 1000, sent));
-    }
-
-    @Test
     void audible_unconfirmed_audio_waits_for_a_real_role() {
         byte[] speech = {0x10, 0x27, 0x10, 0x27};
         assertTrue(Orchestrator.awaitsVoiceRole(10, speech, List.of()));

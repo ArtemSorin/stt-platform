@@ -5,6 +5,7 @@ import ru.sttplatform.analytics.engine.AnswerTiming;
 import ru.sttplatform.analytics.engine.EndpointDetector;
 import ru.sttplatform.analytics.engine.InterviewDetails;
 import ru.sttplatform.analytics.engine.InterviewSession;
+import ru.sttplatform.analytics.engine.JudgeInput;
 import ru.sttplatform.analytics.engine.SpokenText;
 import ru.sttplatform.analytics.engine.TermNormalizer;
 import ru.sttplatform.analytics.engine.Verdict;
@@ -19,6 +20,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Склейка конвейера для одного подключения: звук → Vosk → конец ответа → решение → следующий вопрос.
@@ -36,7 +38,7 @@ import java.util.concurrent.TimeUnit;
  *       клиент показывает и озвучивает только после окна. Если человек всё-таки продолжил — решение
  *       откатывается (retract), и он дозаканчивает ответ на прежний вопрос.</li>
  * </ol>
- * Решение считается за микросекунды; тяжёлое (flush Vosk, второй проход Whisper, пересчёт отчёта) идёт вне критического пути.
+ * Смысловая оценка FRIDA выполняется асинхронно; при отсутствии заключения автомат ожидает установленный бюджет.
  * @version 1.0.0
  */
 public final class LiveInterview {
@@ -84,6 +86,7 @@ public final class LiveInterview {
     private final Sender out;
     private final TermNormalizer normalizer;
     private final SpokenText spoken;
+    private final AtomicLong previewGeneration = new AtomicLong();
 
     private Timing timing = Timing.defaults();
     private Transcriber transcriber;
@@ -110,18 +113,30 @@ public final class LiveInterview {
     private InterviewSession.Peek tentative;
     // смысловая оценка модели на мягком конце ответа: решение ждёт заключение, но не дольше judgeDeadlineMs
     private AnswerJudge judge;
-    private long judgeDeadlineMs = 1200;
+    private long judgeDeadlineMs = 8000;
     private CompletableFuture<Verdict> tentativeFuture;
     private String tentativeText;
     private Verdict tentativeVerdict;
     private boolean tentativeResolved;
     private long tentativeStartSilenceMs;
+    private long tentativeStartedNanos;
+    private long nextJudgeRetryNanos;
+    private java.util.function.LongSupplier decisionClock = System::nanoTime;
     private long commitAtSilenceMs;
     private long graceStartAudioMs;
     private boolean pendingFinish;
     private long ttsEndMs;               // когда закончилась озвучка вопроса (режим «в наушниках»): это время не считается раздумьем
     private volatile int answerVersion;   // растёт при откате: устаревшие результаты Whisper игнорируются
     private int answerId;
+    private boolean deferredFinalReport;
+    private boolean finalReportRequested;
+    private boolean finalizationPrepared;
+    private boolean finalUsesVosk;
+    private boolean finalUsesMixed;
+    private volatile boolean finalScoringIncomplete;
+    private boolean finalTranscriptIncomplete;
+    private boolean finalReferencesMissing;
+    private final Set<Integer> finalAnswerIds = ConcurrentHashMap.newKeySet();
     private boolean finished;
 
     // контроль «успевает ли распознавание за речью»
@@ -156,8 +171,8 @@ public final class LiveInterview {
     }
 
     /**
-     * Подключает смысловую оценку ответов моделью. Без неё (или пока модель недоступна) решения принимают правила
-     * на ключевых словах.
+     * Подключает смысловую оценку ответов моделью. Если модель временно недоступна, правила ждут окончания бюджета;
+     * при явно отключённой модели они применяются без ожидания.
      *
      * @param judge модель оценки или {@code null}
      * @param decisionDeadlineMs сколько ждать заключение после конца ответа, прежде чем решить по правилам
@@ -166,6 +181,9 @@ public final class LiveInterview {
         this.judge = judge;
         this.judgeDeadlineMs = decisionDeadlineMs;
     }
+
+    /** Подмена монотонных часов в проверках автомата. */
+    void setDecisionClock(java.util.function.LongSupplier clock) { this.decisionClock = clock; }
 
     /**
      * Подключает второй проход распознавания.
@@ -186,6 +204,10 @@ public final class LiveInterview {
         this.awaitExternalRefinement = waitMs > 0;
     }
 
+    /** Откладывает построение отчёта до команды окончания итоговой обработки.
+     * @param enabled включить отложенный отчёт */
+    public void setDeferredFinalReport(boolean enabled) { this.deferredFinalReport = enabled; }
+
     /** Настраивает место сохранения отчёта и сведения о кандидате.
      * @param exporter средство экспорта отчёта
      * @param candidate имя кандидата для отчёта
@@ -202,11 +224,39 @@ public final class LiveInterview {
      */
     public void start() {
         startedAt = java.time.Instant.now();
+        if (deferredFinalReport) {
+            out.send(Map.of("type", "scenario_rubric", "criteria",
+                    ru.sttplatform.analytics.judge.FridaPromptBuilder.scoringRubric()));
+            int order = 0;
+            for (var q : interview.scenarioQuestions()) {
+                Map<String, Object> snapshot = new LinkedHashMap<>();
+                snapshot.put("type", "scenario_question");
+                snapshot.put("questionId", q.stableId());
+                snapshot.put("order", ++order);
+                snapshot.put("level", q.level().title);
+                snapshot.put("topic", q.topic());
+                snapshot.put("text", q.text());
+                snapshot.put("reference", q.reference());
+                snapshot.put("notes", q.notes());
+                out.send(snapshot);
+                for (int i = 0; i < q.followUps().size(); i++) {
+                    Map<String, Object> followUp = new LinkedHashMap<>();
+                    followUp.put("type", "scenario_followup");
+                    followUp.put("questionId", q.stableId());
+                    followUp.put("followUpId", q.followUpDetails().isEmpty() ? null : q.followUpDetails().get(i).id());
+                    followUp.put("text", q.followUps().get(i));
+                    followUp.put("reference", q.followUpDetails().isEmpty() ? null : q.followUpDetails().get(i).reference());
+                    followUp.put("notes", q.followUpDetails().isEmpty() ? null : q.followUpDetails().get(i).notes());
+                    out.send(followUp);
+                }
+            }
+        }
         out.send(question(interview.start(), 0));
     }
 
     /** Клиент показал/озвучил вопрос и готов слушать ответ: с этого момента идёт отсчёт «скорости ответа». */
     public void onReady() {
+        previewGeneration.incrementAndGet();
         if (finished) return;
         committed.setLength(0);
         answerAudio.reset();
@@ -230,17 +280,55 @@ public final class LiveInterview {
         if (finished || phase == Phase.IDLE || phase == Phase.WAIT_READY || displayText == null || displayText.isBlank())
             return;
         long started = System.nanoTime();
-        if (judge != null && judge.ready()) {
-            CompletableFuture<Verdict> future = judge.preview(interview.judgeInput(displayText));
-            if (future != null) {                  // модель свободна — подсказка по смыслу; иначе ниже мгновенная по правилам
-                future.whenComplete((verdict, error) -> {
-                    InterviewSession.Peek peek = interview.peek(normalizer.normalize(displayText, false), error == null ? verdict : null);
-                    out.send(previewEvent(peek, displayText, requestId, started));
-                });
-                return;
-            }
+        long generation = previewGeneration.incrementAndGet();
+        if (judge == null) {
+            out.send(previewEvent(interview.peek(normalizer.normalize(displayText, false)), displayText, requestId, started));
+            return;
         }
-        out.send(previewEvent(interview.peek(normalizer.normalize(displayText, false)), displayText, requestId, started));
+        previewAttempt(generation, displayText, requestId, interview.judgeInput(displayText), started);
+    }
+
+    /** Повторяем предварительную оценку до истечения общего бюджета; устаревшие подсказки отбрасываем. */
+    private void previewAttempt(long generation, String text, String requestId, JudgeInput input, long started) {
+        if (previewGeneration.get() != generation) return;
+        long remaining = TimeUnit.MILLISECONDS.toNanos(judgeDeadlineMs) - (System.nanoTime() - started);
+        if (remaining <= 0) {
+            emitPreview(generation, text, requestId, started, null);
+            return;
+        }
+        CompletableFuture<Verdict> future;
+        try {
+            future = judge.ready() ? judge.preview(input) : null;
+        } catch (RuntimeException error) {
+            future = null;
+        }
+        if (future == null) {
+            schedulePreviewRetry(generation, text, requestId, input, started, remaining);
+            return;
+        }
+        future.copy().orTimeout(remaining, TimeUnit.NANOSECONDS).whenComplete((verdict, error) -> {
+            if (error == null && verdict != null && verdict.hasFacts()) {
+                emitPreview(generation, text, requestId, started, verdict);
+            } else {
+                long left = TimeUnit.MILLISECONDS.toNanos(judgeDeadlineMs) - (System.nanoTime() - started);
+                schedulePreviewRetry(generation, text, requestId, input, started, left);
+            }
+        });
+    }
+
+    private void schedulePreviewRetry(long generation, String text, String requestId, JudgeInput input,
+                                      long started, long remainingNanos) {
+        if (previewGeneration.get() != generation) return;
+        long delay = Math.max(0, Math.min(TimeUnit.MILLISECONDS.toNanos(250), remainingNanos));
+        CompletableFuture.delayedExecutor(delay, TimeUnit.NANOSECONDS).execute(
+                () -> previewAttempt(generation, text, requestId, input, started));
+    }
+
+    private void emitPreview(long generation, String text, String requestId, long started, Verdict verdict) {
+        if (previewGeneration.get() != generation) return;
+        InterviewSession.Peek peek = interview.peek(normalizer.normalize(text, false), verdict);
+        if (previewGeneration.compareAndSet(generation, generation + 1))
+            out.send(previewEvent(peek, text, requestId, started));
     }
 
     private Map<String, Object> previewEvent(InterviewSession.Peek peek, String displayText, String requestId, long started) {
@@ -290,8 +378,9 @@ public final class LiveInterview {
         advance(st);
     }
 
-    /** Передаёт уже распознанный кадр; аналитика не получает PCM-аудио.
-     * @param type тип события Vosk: {@code partial} или {@code final}
+    /** Передаёт уже собранный текст и состояние VAD; аналитика не получает PCM-аудио.
+     * @param type {@code snapshot} для текста единственного Vosk после фильтрации роли,
+     *             {@code partial}/{@code final} — для совместимости со старым протоколом
      * @param text распознанный текст
      * @param samples число сэмплов обработанного аудио
      * @param rms среднеквадратичная энергия кадра
@@ -307,7 +396,14 @@ public final class LiveInterview {
                            long speechDurationMs, long silenceMs) {
         if (finished || phase == Phase.IDLE || phase == Phase.WAIT_READY) return;
         SpeechEngine.Result result = null;
-        if ("partial".equals(type) || "final".equals(type)) {
+        if ("snapshot".equals(type)) {
+            // STT передаёт заново собранный текст единственного Vosk после назначения ролей.
+            committed.setLength(0);
+            if (text != null && !text.isBlank()) committed.append(text);
+            partial = "";
+            refreshCurrent();
+            send("partial", "text", currentDisplay);
+        } else if ("partial".equals(type) || "final".equals(type)) {
             result = new SpeechEngine.Result("final".equals(type), text == null ? "" : text);
             foldResults(List.of(result));
             send("partial", "text", currentDisplay);
@@ -327,6 +423,7 @@ public final class LiveInterview {
             }
             case TENTATIVE -> {
                 if (st != EndpointDetector.State.ENDPOINT) cancelTentative();                 // человек продолжил
+                else if (!current.equals(tentativeText)) enterTentative(); // пришло уточнение текста: старый вердикт больше не подходит
                 else if (resolveTentative() && detector.silenceMs() >= commitAtSilenceMs) commitCurrent(true);   // жёсткий конец
             }
             case GRACE -> {
@@ -345,8 +442,96 @@ public final class LiveInterview {
 
     /** Кнопка «Завершить»: отчёт по уже отвеченным вопросам. */
     public void onStop() {
-        if (finished) return;
-        finishInterview();
+        previewGeneration.incrementAndGet();
+        if (!deferredFinalReport) {
+            if (!finished) finishInterview();
+            return;
+        }
+        if (finalReportRequested) return;
+        if (!finalizationPrepared) throw new IllegalStateException("Финализация интервью не подготовлена");
+        if (!finalAnswerIds.containsAll(answerRefs.keySet()))
+            throw new IllegalStateException("Получены не все итоговые ответы");
+        finished = true;
+        phase = Phase.IDLE;
+        finalReportRequested = true;
+        interview.clearRealtimeVerdicts();
+        for (var entry : answerRefs.entrySet()) {
+            if (!interview.hasAnswerText(entry.getValue())) continue;
+            startScoring(entry.getValue(), entry.getKey());
+            startFollowUpScoring(entry.getValue(), entry.getKey());
+        }
+        sendReport();
+    }
+
+    /** Отменяет отложенные подсказки при разрыве соединения. */
+    public void close() {
+        previewGeneration.incrementAndGet();
+    }
+
+    /** Фиксирует источник финализации даже если в интервью нет ответов.
+     * @param source whisper или vosk
+     * @throws IllegalStateException если финализация не готова
+     * @throws IllegalArgumentException при неизвестном источнике */
+    public void onFinalSource(String source) {
+        if (!deferredFinalReport || !finalizationPrepared || finalReportRequested)
+            throw new IllegalStateException("Источник итогового текста сейчас не принимается");
+        if (!"whisper".equals(source) && !"vosk".equals(source) && !"mixed".equals(source))
+            throw new IllegalArgumentException("Неизвестный источник итогового текста");
+        if ("vosk".equals(source)) finalUsesVosk = true;
+        if ("mixed".equals(source)) finalUsesMixed = true;
+    }
+
+    /** Закрывает live-этап и подтверждает, что аналитика готова принять итоговые ответы. */
+    public void onPrepareFinal() {
+        previewGeneration.incrementAndGet();
+        if (!deferredFinalReport || finalReportRequested || finalizationPrepared)
+            throw new IllegalStateException("Итоговая обработка недоступна в этом режиме");
+        if (!finished && (phase == Phase.LISTENING || phase == Phase.TENTATIVE)) {
+            foldResults(speech.finish());
+            partial = "";
+            refreshCurrent();
+            if (words > 0) commitCurrent(false);
+        }
+        finished = true;
+        phase = Phase.IDLE;
+        finalizationPrepared = true;
+        out.send(Map.of("type", "finalization_ready"));
+    }
+
+    /** Принимает итоговый ответ без дополнительного предупреждения о качестве.
+     * @param id ID ответа
+     * @param questionId ID основного вопроса
+     * @param followUpId ID уточнения или null
+     * @param text итоговый текст
+     * @param source whisper или vosk */
+    public void onFinalAnswer(int id, String questionId, String followUpId, String text, String source) {
+        onFinalAnswer(id, questionId, followUpId, text, source, false);
+    }
+
+    /** Принимает итоговый ответ и признак неполной транскрипции.
+     * @param id ID ответа
+     * @param questionId ID основного вопроса
+     * @param followUpId ID уточнения или null
+     * @param text итоговый текст
+     * @param source whisper или vosk
+     * @param transcriptIncomplete присутствуют спорные или нераспознанные участки
+     * @throws IllegalArgumentException при ошибке ID, источника или текста
+     * @throws IllegalStateException если финализация не готова */
+    public void onFinalAnswer(int id, String questionId, String followUpId, String text, String source, boolean transcriptIncomplete) {
+        if (!deferredFinalReport || !finalizationPrepared || finalReportRequested)
+            throw new IllegalStateException("Итоговые ответы сейчас не принимаются");
+        InterviewSession.AttemptRef ref = answerRefs.get(id);
+        if (!interview.matchesAnswer(ref, questionId, followUpId))
+            throw new IllegalArgumentException("Ответ не соответствует заданному вопросу");
+        if (!"whisper".equals(source) && !"vosk".equals(source) && !"mixed".equals(source))
+            throw new IllegalArgumentException("Неизвестный источник ответа");
+        if (text == null || text.length() > 12000) throw new IllegalArgumentException("Недопустимый размер ответа");
+        if (!finalAnswerIds.add(id)) throw new IllegalArgumentException("Итоговый ответ уже получен");
+        if ("vosk".equals(source)) finalUsesVosk = true;
+        if ("mixed".equals(source)) finalUsesMixed = true;
+        finalTranscriptIncomplete |= transcriptIncomplete;
+        interview.replaceFinalAnswer(ref, normalizer.normalize(text, false), normalizer.normalize(text, true),
+                !"vosk".equals(source));
     }
 
     /** Применяет позднюю расшифровку Whisper к тому же ответу, который уже оценён.
@@ -354,10 +539,11 @@ public final class LiveInterview {
      * @param text уточнённый текст распознавания
      */
     public void onRefined(int id, String text) {
+        if (deferredFinalReport) throw new IllegalStateException("Live-уточнения не принимаются при итоговом анализе");
         InterviewSession.AttemptRef ref = answerRefs.get(id);
         if (ref == null || text == null || text.isBlank()) return;
         interview.refine(ref, normalizer.normalize(text, false), normalizer.normalize(text, true), 2);
-        startScoring(ref, id);
+        if (!deferredFinalReport) startScoring(ref, id);
         Map<String, Object> event = new LinkedHashMap<>();
         event.put("type", "refined");
         event.put("answerId", id);
@@ -396,14 +582,12 @@ public final class LiveInterview {
         tentativeVerdict = null;
         tentativeResolved = true;
         tentativeText = current;
-        if (judge != null && judge.ready() && words > 0) {
+        tentativeStartedNanos = decisionClock.getAsLong();
+        nextJudgeRetryNanos = tentativeStartedNanos;
+        if (judge != null && words > 0) {
             // решение по смыслу: просим модель сразу, а паузу «на раздумье» отсчитываем от этого же момента
-            try {
-                tentativeFuture = judge.decide(interview.judgeInput(currentDisplay));
-                tentativeResolved = false;
-            } catch (RuntimeException e) {
-                tentativeFuture = null;
-            }
+            tentativeResolved = false;
+            requestTentative();
         }
         tentativeStartSilenceMs = detector.silenceMs();
         if (!tentativeResolved) {
@@ -430,14 +614,32 @@ public final class LiveInterview {
      */
     private boolean resolveTentative() {
         if (tentativeResolved) return true;
-        if (tentativeFuture.isDone()) {
-            tentativeVerdict = tentativeFuture.isCompletedExceptionally() ? null : tentativeFuture.getNow(null);
-        } else if (detector.silenceMs() - tentativeStartSilenceMs < judgeDeadlineMs) {
+        long now = decisionClock.getAsLong();
+        if (tentativeFuture != null && tentativeFuture.isDone() && !tentativeFuture.isCompletedExceptionally()
+                && !tentativeFuture.isCancelled()) {
+            tentativeVerdict = tentativeFuture.getNow(null);
+        }
+        if ((tentativeVerdict == null || !tentativeVerdict.hasFacts())
+                && now - tentativeStartedNanos < TimeUnit.MILLISECONDS.toNanos(judgeDeadlineMs)) {
+            if ((tentativeFuture == null || tentativeFuture.isDone()) && now >= nextJudgeRetryNanos) {
+                requestTentative();
+            }
             return false;
         }
-        tentativeResolved = true;                   // время вышло или модель ответила (в том числе сбоем) — решаем
+        tentativeResolved = true;                   // дождались пригодного заключения или конца бюджета
         planCommit(interview.peek(current, tentativeVerdict));
         return true;
+    }
+
+    /** Повторяет временно неудачный запрос, не блокируя поток аудио. */
+    private void requestTentative() {
+        nextJudgeRetryNanos = decisionClock.getAsLong() + TimeUnit.MILLISECONDS.toNanos(500);
+        try {
+            if (!judge.ready()) return;
+            tentativeFuture = judge.decide(interview.judgeInput(currentDisplay));
+        } catch (RuntimeException e) {
+            tentativeFuture = null;
+        }
     }
 
     private void cancelTentative() {
@@ -455,6 +657,7 @@ public final class LiveInterview {
 
     /** Жёсткий конец: решение принято и отправлено. Дальше — окно отмены. */
     private void commit(String text, String display, AnswerTiming at, boolean grace) {
+        previewGeneration.incrementAndGet();
         long t0 = System.nanoTime();
         // заключение модели годится только для того самого текста, по которому его запрашивали
         Verdict verdict = tentativeResolved && tentativeVerdict != null && text.equals(tentativeText) ? tentativeVerdict : null;
@@ -463,7 +666,7 @@ public final class LiveInterview {
         InterviewSession.AttemptRef ref = interview.lastAttempt();
         int committedAnswerId = ++answerId;
         if (ref != null) answerRefs.put(committedAnswerId, ref);
-        if (awaitExternalRefinement && !text.isBlank()) pendingRefinements.add(committedAnswerId);
+        if (!deferredFinalReport && awaitExternalRefinement && !text.isBlank()) pendingRefinements.add(committedAnswerId);
         tentative = null;
         tentativeFuture = null;
         tentativeVerdict = null;
@@ -496,8 +699,8 @@ public final class LiveInterview {
         // ---- вне критического пути ----
         // текст получен после flush Vosk, то есть уже финальный: фиксируем как «Vosk», остальное доточит Whisper
         interview.refine(ref, text, display, 1);
-        if (!text.isBlank()) startScoring(ref, answerId);
-        if (transcriber != null && !text.isBlank())
+        if (!deferredFinalReport && !text.isBlank()) startScoring(ref, answerId);
+        if (!deferredFinalReport && transcriber != null && !text.isBlank())
             startSecondPass(ref, trimAnswerAudio(detector.speechStartMs()),
                     Math.max(0, detector.speechStartMs() - 300), answerId);
 
@@ -523,18 +726,51 @@ public final class LiveInterview {
 
     /** Фоновая оценка по критериям для отчёта: вне критического пути, с низким приоритетом у модели. */
     private void startScoring(InterviewSession.AttemptRef ref, int answerId) {
-        if (judge == null || !judge.ready()) return;
+        if (judge == null || !judge.ready()) {
+            if (deferredFinalReport) finalScoringIncomplete = true;
+            return;
+        }
         final int version = answerVersion;
         try {
             CompletableFuture<Void> f = judge.score(interview.judgeInput(ref)).thenAccept(v -> {
                 if (version == answerVersion) interview.applyScoring(ref, v);
             }).exceptionally(e -> {
+                if (deferredFinalReport) finalScoringIncomplete = true;
                 out.send(Map.of("type", "judge_error", "answerId", answerId,
                         "message", String.valueOf(e.getCause() == null ? e : e.getCause())));
                 return null;
             });
             pending.add(f);
         } catch (RuntimeException e) {
+            if (deferredFinalReport) finalScoringIncomplete = true;
+            out.send(Map.of("type", "judge_error", "answerId", answerId, "message", String.valueOf(e.getMessage())));
+        }
+    }
+
+    private void startFollowUpScoring(InterviewSession.AttemptRef ref, int answerId) {
+        if (interview.missingFollowUpReference(ref)) {
+            finalReferencesMissing = true;
+            return;
+        }
+        var input = interview.followUpJudgeInput(ref);
+        if (input == null || input.turns().get(0).answer().isBlank()) return;
+        if (judge == null || !judge.ready()) {
+            finalScoringIncomplete = true;
+            return;
+        }
+        final int version = answerVersion;
+        try {
+            var f = judge.score(input).thenAccept(v -> {
+                if (version == answerVersion) interview.applyFollowUpScoring(ref, v);
+            }).exceptionally(e -> {
+                finalScoringIncomplete = true;
+                out.send(Map.of("type", "judge_error", "answerId", answerId,
+                        "message", String.valueOf(e.getCause() == null ? e : e.getCause())));
+                return null;
+            });
+            pending.add(f);
+        } catch (RuntimeException e) {
+            finalScoringIncomplete = true;
             out.send(Map.of("type", "judge_error", "answerId", answerId, "message", String.valueOf(e.getMessage())));
         }
     }
@@ -560,9 +796,10 @@ public final class LiveInterview {
     }
 
     private void finishInterview() {
+        previewGeneration.incrementAndGet();
         finished = true;
         phase = Phase.IDLE;
-        sendReport();
+        if (!deferredFinalReport) sendReport();
     }
 
     // ------------------------------------------------------------------ вспомогательное
@@ -697,12 +934,29 @@ public final class LiveInterview {
             try {
                 CompletableFuture.allOf(pending.toArray(new CompletableFuture<?>[0])).get(pendingWaitMs, TimeUnit.MILLISECONDS);
             } catch (Exception ignored) {
-                // Фоновая оценка не должна блокировать выдачу отчёта.
+                if (deferredFinalReport) {
+                    finalScoringIncomplete = true;
+                    answerVersion++; // Поздний результат не должен менять уже опубликованный отчёт.
+                }
             }
         }
-        InterviewDetails details = interview.details(candidate, startedAt, settings);
+        Map<String, String> reportSettings = new LinkedHashMap<>(settings);
+        if (deferredFinalReport) reportSettings.put("Источник итогового текста", finalUsesVosk ? "Vosk — резервная оценка" : finalUsesMixed ? "Основная транскрипция с резервными участками Vosk" : "Whisper");
+        if (deferredFinalReport && finalScoringIncomplete)
+            reportSettings.put("Состояние оценки FRIDA", "Неполная оценка; используются резервные правила");
+        if (deferredFinalReport && finalReferencesMissing)
+            reportSettings.put("Эталоны уточнений", "Отсутствуют; отдельная оценка некоторых уточнений недоступна");
+        if (deferredFinalReport && finalTranscriptIncomplete)
+            reportSettings.put("Качество итоговой транскрипции", "Есть спорные или нераспознанные участки; требуется проверка");
+        InterviewDetails details = interview.details(candidate, startedAt, reportSettings);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("type", "report");
+        if (deferredFinalReport) {
+            m.put("transcriptSource", finalUsesVosk ? "vosk_fallback" : finalUsesMixed ? "mixed" : "whisper");
+            m.put("scoringIncomplete", finalScoringIncomplete);
+            m.put("transcriptIncomplete", finalTranscriptIncomplete);
+            m.put("referencesMissing", finalReferencesMissing);
+        }
         m.put("report", details.report());      // эталонные ответы в браузер не уходят — только оценки
         if (exporter != null) {
             try {
@@ -729,6 +983,8 @@ public final class LiveInterview {
     private Map<String, Object> question(InterviewSession.Prompt p, int graceMs) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("type", "question");
+        m.put("questionId", p.stableQuestionId());
+        if (p.followUpId() != null) m.put("followUpId", p.followUpId());
         m.put("number", p.number());
         m.put("total", p.total());
         m.put("level", p.level());

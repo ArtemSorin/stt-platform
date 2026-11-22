@@ -18,7 +18,7 @@ async function request(path, body, headers = {}) {
   if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
   return data;
 }
-function showError(message) { $('error').textContent = message; $('error').hidden = false; }
+function showError(message) { $('error').textContent = String(message).replace(/whisper/gi, 'итоговое распознавание'); $('error').hidden = false; }
 function clearError() { $('error').hidden = true; }
 function time(seconds) {
   const value = Math.floor(seconds);
@@ -58,12 +58,12 @@ function renderFinalReport(report, excel, phase) {
       panel.hidden = false;
       $('report-state').textContent = phase === 'error'
         ? 'Итоговый отчёт не получен. Проверьте ошибку обработки и файлы результата.'
-        : 'Завершаем обработку аудио и ждём итоговый отчёт. Если Whisper включён, сервис также ждёт его уточнения.';
+        : 'Завершаем обработку аудио и ждём итоговый отчёт.';
     } else panel.hidden = true;
     return;
   }
   panel.hidden = false; body.hidden = false;
-  $('report-state').textContent = 'Итоговая оценка готова. Для ответов, которые Whisper успел уточнить, использована его финальная расшифровка.';
+  $('report-state').textContent = 'Итоговая оценка готова.';
   const signature = JSON.stringify(report);
   if (signature === lastReportSignature) return;
   lastReportSignature = signature;
@@ -124,8 +124,7 @@ function renderTranscript(integration) {
     if (line) target.append(line);
   }
   const partials = integration.channel_partials;
-  const partialText = partials ? [partials.system && `Кандидат/система · ${partials.system}`,
-    partials.microphone && `Интервьюер · ${partials.microphone}`].filter(Boolean).join(' | ') : '';
+  const partialText = partials?.system ? `Кандидат/система · ${partials.system}` : '';
   $('partial').textContent = partialText ? `${partialText} (предварительно)` : integration.mixed_partial
     ? `${integration.current_role || 'Не определено'} · ${integration.mixed_partial} (предварительно)`
     : 'Промежуточный текст Vosk появится во время речи.';
@@ -143,11 +142,25 @@ function render(status) {
   if (status.output_dir) $('output').textContent = status.output_dir;
   if (status.error) showError(status.error);
   if (integration.bridge_error) showError(integration.bridge_error);
-  if (integration.microphone_warning) showError(integration.microphone_warning);
   if (integration.candidate_warning) showError(integration.candidate_warning);
   window.transcriptView?.update(phase, integration.transcripts, integration.transcript_error, status.session_id, integration.transcript_progress);
   renderTranscript(integration);
   renderFinalReport(integration.report, integration.excel, phase);
+  // При каждом обновлении состояния заново собираем строку, чтобы предупреждения не накапливались.
+  if (integration.report) {
+    const report = integration.report;
+    $('report-counts').textContent = `${report.finishedEarly ? 'Интервью завершено досрочно' : 'Интервью завершено'} · отвечено на ${report.answeredQuestions ?? '—'} из ${report.plannedQuestions ?? '—'} вопросов.`;
+  }
+  if (integration.report && integration.report_transcript_source === 'vosk_fallback')
+    $('report-counts').textContent += ' Итоговая оценка построена по резервной транскрипции Vosk.';
+  if (integration.report && integration.report_transcript_source === 'mixed')
+    $('report-counts').textContent += ' В итоговой транскрипции есть резервные участки Vosk или нераспознанные фрагменты.';
+  if (integration.report && integration.report_scoring_incomplete)
+    $('report-counts').textContent += ' Оценка FRIDA неполная; использованы резервные правила.';
+  if (integration.report && integration.report_transcript_incomplete)
+    $('report-counts').textContent += ' В транскрипции есть спорные или нераспознанные участки; проверьте результат.';
+  if (integration.report && integration.report_references_missing)
+    $('report-counts').textContent += ' Нет эталонов для части уточнений; их отдельная оценка недоступна.';
 
   const question = integration.question;
   if (question) {
@@ -223,15 +236,12 @@ function render(status) {
     $('decision').textContent = 'Решение отменено: кандидат продолжил ответ; текущий вопрос сохранён.';
     log('Решение отменено, интервью продолжено');
   }
-  $('whisper').textContent = 'Whisper: ' + (integration.whisper_state || 'ожидание')
-    + (integration.refined?.text ? ` · уточнённый текст: ${integration.refined.text}` : '');
-  if (integration.refined?.text) log(`Whisper уточнил ответ: ${integration.refined.text}`);
 
   if (phase === 'retry') {
     enroll.disabled = false; enroll.textContent = 'Повторить запись голоса'; finish.disabled = true;
   } else if (phase === 'live') {
     enroll.disabled = true; finish.disabled = false;
-    $('hint').textContent = 'Эталон записан из звука компьютера; во время интервью обрабатываются микрофон и звук компьютера.';
+    $('hint').textContent = 'Эталон записан из звука компьютера; для live-анализа используется системный звук, оба канала записываются для итоговой транскрипции.';
   } else if (phase === 'finished' || phase === 'error') {
     enroll.disabled = false; enroll.textContent = 'Новое интервью'; finish.disabled = true;
   }

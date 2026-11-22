@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
+import ru.sttplatform.common.json.Json;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -68,13 +69,16 @@ public class JudgeProcessManager {
         output.start();
 
         HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
-        HttpRequest ping = HttpRequest.newBuilder(URI.create(judge.url().replaceAll("/+$", "") + "/"))
+        HttpRequest ping = HttpRequest.newBuilder(URI.create(judge.url().replaceAll("/+$", "") + "/status"))
                 .timeout(Duration.ofSeconds(2)).GET().build();
         long deadline = System.nanoTime() + Duration.ofSeconds(process.startupTimeoutSeconds()).toNanos();
         while (System.nanoTime() < deadline) {
             if (!child.isAlive()) throw new IllegalStateException("Сервер модели завершился до готовности, код " + child.exitValue());
             try {
-                if (http.send(ping, HttpResponse.BodyHandlers.discarding()).statusCode() < 500) {
+                HttpResponse<String> response = http.send(ping, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                var status = Json.tree(response.body());
+                if (response.statusCode() == 200 && process.backend().equals(status.path("backend").asText())
+                        && process.model().equals(status.path("model").asText()) && child.isAlive()) {
                     log.info("Сервер модели готов: {}", judge.url());
                     return;
                 }

@@ -84,12 +84,13 @@ public record InterviewDetails(String candidate, String levels, Instant startedA
      * @param action действие интервью после попытки
      * @param reason причина принятого действия
      * @param answeredAt время фиксации ответа
+     * @param followUpScoring отдельная оценка уточнения или null
      * @version 1.0.0
      */
     public record AttemptDetail(boolean followUp, int followUpNumber, String prompt, String answer, boolean answered,
                                 String source, int words, long latencyMs, long speechMs, Double wpm,
                                 double speedScore, double coverageAfter, String action, String reason,
-                                Instant answeredAt) {}
+                                Instant answeredAt, Verdict followUpScoring) {}
 
     /**
      * Сохраняет покрытие отдельного понятия ответа.
