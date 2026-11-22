@@ -1,0 +1,20 @@
+{
+  "integration": "speckit",
+  "version": "1.4.4.dev0",
+  "installed_at": "2026-11-22T15:08:29.869267+00:00",
+  "files": {
+    ".specify/scripts/powershell/check-prerequisites.ps1": "9d7604f94f432fb187921f453985f3a0b7ee63af9eead89d11df8c8770a02d53",
+    ".specify/scripts/powershell/common.ps1": "85a25f1c38e7210b49207ed4e02ba9cccec08030a55e6f96e25cb707942c7e37",
+    ".specify/scripts/powershell/create-new-feature.ps1": "f0709c64a17554d4a4f87c9093d1a779ade6ef9621e6e1e502186d6b72d94d71",
+    ".specify/scripts/powershell/resolve-template.ps1": "e87810c30c8ccc15ef07a14836942a3190060ea1e17234cabfc29a273f2a46dc",
+    ".specify/scripts/powershell/setup-plan.ps1": "4a880c4520470de7f27d52d24b84d32f7e49df69fb63c1a5d1ec58dd685a5e34",
+    ".specify/scripts/powershell/setup-tasks.ps1": "4e56b1158c2ee3cd4095dd76d211861ab36852812e202b76ee34ddc93579a18f",
+    ".specify/scripts/powershell/markdown_sections.py": "189e980b7c86f54c0886be57e3113cf47fc474467a08dff851144b5cc5e1fe39",
+    ".specify/templates/checklist-template.md": "70bbc48e884fab372ffb09e83e78ff983e28b69caebf8cd9964a02b6836683ac",
+    ".specify/templates/constitution-template.md": "ce7549540fa45543cca797a150201d868e64495fdff39dc38246fb17bd4024b3",
+    ".specify/templates/plan-template.md": "a828ad6206526574ab3fc99be6d0154588cb1c9774c5919d71b81ab5b2dbffa0",
+    ".specify/templates/spec-template.md": "3945437fc35cd30a5b2bf7beea680337c3516826d3efa5a6b92c4a7eca1ba28e",
+    ".specify/templates/tasks-template.md": "b0f527d41e546af0c31903e04f9b20965b6b497b573792198f663a64ce128863",
+    ".specify/.gitignore": "0a61c5378b0bb2e0f85babff99c8b166f2170a2c12378cd17d929aa19296ec88"
+  }
+}

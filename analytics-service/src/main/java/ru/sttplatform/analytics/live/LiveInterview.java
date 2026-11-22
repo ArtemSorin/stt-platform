@@ -777,6 +777,8 @@ public final class LiveInterview {
 
     private void endGrace() {
         phase = Phase.WAIT_READY;
+        // Подтверждение привязано к аудио: настенный таймер может опередить обработку речи.
+        out.send(Map.of("type", "grace_complete", "answerId", answerId));
         if (pendingFinish) finishInterview();
     }
 

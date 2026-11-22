@@ -8,6 +8,7 @@ let enrollmentStartedAt = 0, enrollmentTimer, enrollmentFinishing = false;
 let startTime = 0, polling = false, currentQuestionKey = '', scheduledQuestionKey = '', questionTimer;
 let lastDecision = '', lastPreviewKey = '', lastPreviewId = '', lastReportSignature = '', eventLines = [];
 let voices = [], activeQuestion = null, questionBlocked = false, questionRetracted = false;
+let ttsGeneration = 0, ttsWatchdog, questionReady = false, ttsInProgress = false, ttsManualRequired = false;
 let voiceRotationStartId = '';
 const questionVoiceAssignments = new Map();
 
@@ -167,24 +168,29 @@ function render(status) {
     activeQuestion = question;
     const key = questionKey(question), waitMs = integration.question_wait_ms || 0;
     questionRetracted = Boolean(integration.decision_retracted);
-    questionBlocked = waitMs > 0 || questionRetracted;
+    questionBlocked = waitMs > 0 || questionRetracted || Boolean(integration.question_pending);
     if (key !== currentQuestionKey) {
       currentQuestionKey = key; scheduledQuestionKey = '';
+      questionReady = false; ttsManualRequired = false;
       clearTimeout(questionTimer);
       $('question').textContent = question.text || '—';
       $('question-meta').textContent = `Вопрос ${question.number || ''} · ${question.level || ''} · ${question.topic || ''}`;
       log(`Поступил вопрос ${question.number || ''}${question.followUp ? ' (уточнение)' : ''}`);
     }
     const ttsOn = $('tts-enabled').checked && 'speechSynthesis' in window;
-    $('asked').hidden = ttsOn;
-    $('asked').disabled = phase !== 'live' || waitMs > 0;
-    $('skip').disabled = phase !== 'live' || waitMs > 0;
-    if (integration.decision_retracted) {
-      clearTimeout(questionTimer); scheduledQuestionKey = '';
+    $('asked').hidden = ttsOn && !ttsManualRequired;
+    $('asked').disabled = phase !== 'live' || questionBlocked || questionReady || ttsInProgress;
+    $('skip').disabled = phase !== 'live' || questionBlocked || ttsInProgress;
+    if (integration.question_pending) {
+      clearTimeout(questionTimer);
+      $('asked').disabled = true; $('skip').disabled = true;
+      $('tts-state').textContent = 'Проверяем окончание ответа кандидата.';
+    } else if (integration.decision_retracted) {
+      clearTimeout(questionTimer); scheduledQuestionKey = key;
       $('tts-state').textContent = 'Кандидат продолжил ответ: прежний вопрос остаётся активным, TTS ждёт нового решения.';
       $('asked').disabled = true; $('skip').disabled = true;
     } else {
-    if (waitMs > 0) {
+    if (waitMs > 0 && mode === 'live') {
       $('tts-state').textContent = `Ждём окно отмены ответа: ${(waitMs / 1000).toFixed(1)} с.`;
       $('asked').disabled = true;
       if (scheduledQuestionKey !== key) {
@@ -198,7 +204,7 @@ function render(status) {
           }
         }, waitMs + 25);
       }
-    } else if (scheduledQuestionKey !== key) {
+    } else if (mode === 'live' && !questionReady && scheduledQuestionKey !== key) {
       scheduledQuestionKey = key;
       speakQuestion(question, key);
     }
@@ -249,6 +255,7 @@ function render(status) {
 function speakQuestion(question, key) {
   if (currentQuestionKey !== key || mode !== 'live' || questionBlocked) return;
   if (!$('tts-enabled').checked || !('speechSynthesis' in window)) {
+    ttsInProgress = false; ttsManualRequired = true;
     $('tts-state').textContent = 'Озвучка выключена: задайте вопрос вслух и нажмите кнопку ниже.';
     $('asked').hidden = false; $('asked').disabled = false; $('skip').disabled = false;
     return;
@@ -257,6 +264,8 @@ function speakQuestion(question, key) {
   $('asked').hidden = true; $('asked').disabled = true; $('skip').disabled = true;
   $('tts-state').textContent = 'Озвучиваю вопрос. После озвучки автоматически начнётся анализ ответа.';
   const utterance = new SpeechSynthesisUtterance(question.spoken || question.text);
+  const generation = ++ttsGeneration;
+  ttsInProgress = true;
   const selected = voiceForQuestion(question);
   if (selected) { utterance.voice = selected; utterance.lang = selected.lang; }
   else utterance.lang = 'ru-RU';
@@ -264,15 +273,30 @@ function speakQuestion(question, key) {
   const voiceLabel = selected?.name || 'голос браузера по умолчанию';
   let done = false;
   const after = async () => {
-    if (done || currentQuestionKey !== key || mode !== 'live') return;
-    done = true; $('tts-state').textContent = 'Вопрос озвучен · можно отвечать';
-    try { await request('/api/question/asked', new Uint8Array()); log('TTS завершён, поток ответа открыт'); }
-    catch (error) { showError(error.message); }
+    if (done || generation !== ttsGeneration || currentQuestionKey !== key || mode !== 'live') return;
+    done = true; clearTimeout(ttsWatchdog);
+    try {
+      await request('/api/question/asked', new Uint8Array());
+      if (generation !== ttsGeneration || currentQuestionKey !== key || mode !== 'live') return;
+      ttsInProgress = false; questionReady = true; $('tts-state').textContent = 'Вопрос озвучен · можно отвечать';
+      log('TTS завершён, поток ответа открыт');
+    } catch (error) {
+      if (generation !== ttsGeneration || currentQuestionKey !== key || mode !== 'live') return;
+      ttsInProgress = false; showError(error.message); ttsManualRequired = true; $('asked').hidden = false; $('asked').disabled = false;
+    }
+  };
+  const manualRecovery = () => {
+    if (done || generation !== ttsGeneration || currentQuestionKey !== key || mode !== 'live') return;
+    done = true; clearTimeout(ttsWatchdog); ttsInProgress = false; ttsManualRequired = true;
+    speechSynthesis.cancel();
+    $('tts-state').textContent = 'Не удалось завершить озвучку. Задайте вопрос и подтвердите вручную.';
+    $('asked').hidden = false; $('asked').disabled = false; $('skip').disabled = false;
   };
   utterance.onstart = () => { recordTts('start', question.text, selected); log(`TTS начал вопрос ${question.number || ''} · ${voiceLabel}`); };
   utterance.onend = () => { recordTts('finish', question.text, selected); after(); };
-  utterance.onerror = () => { recordTts('error', question.text, selected); after(); };
+  utterance.onerror = () => { if (generation !== ttsGeneration) return; recordTts('error', question.text, selected); manualRecovery(); };
   speechSynthesis.cancel(); speechSynthesis.speak(utterance);
+  ttsWatchdog = setTimeout(manualRecovery, Math.max(30000, (question.spoken || question.text).length * 250));
   $('tts-state').textContent = `Озвучиваю голосом «${voiceLabel}». Уточнения сохраняют голос основного вопроса.`;
   log(`TTS озвучивает вопрос ${question.number || ''} голосом «${voiceLabel}»`);
 }
@@ -321,12 +345,13 @@ function loadVoices() {
 if ('speechSynthesis' in window) { speechSynthesis.onvoiceschanged = loadVoices; loadVoices(); }
 $('rate').oninput = () => $('rate-value').textContent = Number($('rate').value).toFixed(2).replace('.', ',');
 $('tts-enabled').onchange = () => {
+  ++ttsGeneration; clearTimeout(ttsWatchdog); ttsInProgress = false;
   if (!$('tts-enabled').checked && 'speechSynthesis' in window) {
     if (speechSynthesis.speaking && activeQuestion) recordTts('cancel', activeQuestion.text, voiceForQuestion(activeQuestion));
     speechSynthesis.cancel();
   }
-  scheduledQuestionKey = '';
-  if (activeQuestion && currentQuestionKey && !questionBlocked) {
+  if (!questionReady) scheduledQuestionKey = '';
+  if (activeQuestion && currentQuestionKey && !questionBlocked && !questionReady) {
     scheduledQuestionKey = currentQuestionKey;
     speakQuestion(activeQuestion, currentQuestionKey);
   }
@@ -338,6 +363,7 @@ function stopAudio() {
   worklet.port.postMessage('stop'); return ended;
 }
 function releaseAudio() {
+  ++ttsGeneration; clearTimeout(ttsWatchdog); ttsInProgress = false;
   clearTimeout(enrollmentTimer); enrollmentTimer = undefined;
   for (const captured of [stream, display]) captured?.getTracks().forEach(track => {
     track.onended = null; track.stop();
@@ -476,7 +502,7 @@ enroll.onclick = () => {
 finish.onclick = finishInterview;
 $('asked').onclick = async () => {
   $('asked').disabled = true;
-  try { await request('/api/question/asked', new Uint8Array()); $('tts-state').textContent='Вопрос задан · можно отвечать'; log('Интервьюер отметил вопрос заданным'); }
+  try { await request('/api/question/asked', new Uint8Array()); questionReady = true; $('tts-state').textContent='Вопрос задан · можно отвечать'; log('Интервьюер отметил вопрос заданным'); }
   catch (error) { showError(error.message); $('asked').disabled = false; }
 };
 $('skip').onclick = async () => {

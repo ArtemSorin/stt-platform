@@ -465,6 +465,9 @@ components:
         integration:
           type: object
           properties:
+            question_pending:
+              type: boolean
+              description: Следующий вопрос ожидает обработки защитного окна и пока не должен озвучиваться.
             transcripts:
               type: object
               description: Ссылки доступны после успешной публикации.
