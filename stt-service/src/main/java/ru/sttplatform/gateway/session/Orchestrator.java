@@ -154,6 +154,9 @@ public final class Orchestrator implements AutoCloseable {
     private long capturedSamples, gatedSamples, lastCapturedNanos, lastCandidateEnd;
     private long readySample, answerStartSample;
     private long questionAvailableNanos;
+    private Map<String, Object> pendingQuestion;
+    private int pendingQuestionAnswerId;
+    private boolean questionPending;
     private long nextEventId;
     private long nextPeekRequestId;
     private long lastAppliedPeekRequestId;
@@ -740,6 +743,8 @@ public final class Orchestrator implements AutoCloseable {
     /** Отмечает готовность вопроса и начинает собирать следующий ответ кандидата. */
     public synchronized void questionAsked() {
         if (question == null) throw new IllegalStateException("Сервис аналитики ещё не выдал вопрос.");
+        if (questionPending || decisionRetracted)
+            throw new IllegalStateException("Ожидается подтверждение следующего вопроса.");
         readySample = capturedSamples;
         answerStartSample = readySample;
         answerArmed = true;
@@ -762,6 +767,8 @@ public final class Orchestrator implements AutoCloseable {
 
     /** Закрывает текущую попытку без добавления аудиоданных ответа. */
     public synchronized void questionSkipped() {
+        if (questionPending || decisionRetracted)
+            throw new IllegalStateException("Ожидается подтверждение следующего вопроса.");
         journal("skip", capturedSamples, Json.map("attemptId", currentAttemptId,
                 "questionId", question == null ? null : question.get("questionId"),
                 "followUpId", question == null ? null : question.get("followUpId")));
@@ -1022,12 +1029,29 @@ public final class Orchestrator implements AutoCloseable {
             return;
         }
         if ("question".equals(type)) {
-            question = event;
+            if (data.path("graceMs").asLong() > 0) {
+                pendingQuestion = event;
+                pendingQuestionAnswerId = lastWhisperAnswerId;
+                questionPending = true;
+            } else {
+                question = event;
+                pendingQuestion = null;
+                questionPending = false;
+                decisionRetracted = false;
+            }
             journal("question_issued", Math.max(0, data.path("audioSample").asLong(capturedSamples)),
                     Json.map("questionId", data.path("questionId").asText(), "followUpId", data.has("followUpId") ? data.path("followUpId").asText() : null,
                             "attemptId", data.path("attemptId").asLong()));
             questionAvailableNanos = System.nanoTime()
                     + Math.max(0, data.path("graceMs").asLong()) * 1_000_000L;
+        }
+        if ("grace_complete".equals(type) && pendingQuestion != null
+                && data.path("answerId").asInt(-1) == pendingQuestionAnswerId) {
+            question = pendingQuestion;
+            pendingQuestion = null;
+            questionPending = false;
+            decisionRetracted = false;
+            questionAvailableNanos = System.nanoTime();
         }
         if ("preview".equals(type)) {
             if (!"Кандидат".equals(currentPreviewRole())) return;
@@ -1060,6 +1084,8 @@ public final class Orchestrator implements AutoCloseable {
             logQuietly(Json.map("type", "preliminary_hint_retracted", "reason", data.path("reason").asText("updated")));
         }
         if ("retract".equals(type)) {
+            pendingQuestion = null;
+            questionPending = false;
             journal("retract", Math.max(0, data.path("audioSample").asLong(capturedSamples)),
                     Json.map("attemptId", data.path("attemptId").asLong(), "answerId", lastWhisperAnswerId));
             decisionRetracted = true;
@@ -1090,7 +1116,8 @@ public final class Orchestrator implements AutoCloseable {
             questionAvailableNanos = System.nanoTime();
         }
         if ("decision".equals(type)) {
-            decisionRetracted = false;
+            // До следующего question нельзя показывать восстановленный после отмены вопрос как новый.
+            questionPending = true;
             int answerId = data.path("answerId").asInt();
             answerAttempts.put(answerId, data.path("attemptId").asLong(currentAttemptId));
             lastWhisperAnswerId = answerId;
@@ -1289,6 +1316,7 @@ public final class Orchestrator implements AutoCloseable {
                 "test_mode", testMode,
                 "current_role", currentRole,
                 "decision_retracted", decisionRetracted,
+                "question_pending", questionPending,
                 "question_wait_ms", Math.max(0, (questionAvailableNanos - System.nanoTime()) / 1_000_000L),
                 "mixed_partial", mixedPartial, "mixed_transcript", mixedTranscript.toString(),
                 "channel_partials", separateChannels ? Json.map("system", mixedPartial) : null,

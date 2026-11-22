@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-test('question waits out grace and browser TTS owns the handoff to answer mode', () => {
+test('question waits out grace and browser TTS owns the handoff to answer mode', async () => {
   const nodes = new Map();
   const makeNode = () => ({textContent:'', disabled:false, hidden:false, value:'1', checked:true, children:[],
     classList:{toggle(){}}, replaceChildren(...children){this.children=children;},
@@ -13,6 +13,7 @@ test('question waits out grace and browser TTS owns the handoff to answer mode',
   const timers = [];
   const source = fs.readFileSync(path.join(__dirname, '../../main/resources/static/integrated-app.js'), 'utf8');
   const utterances = [];
+  const requests = [];
   const tts = {onvoiceschanged:null, getVoices:()=>[
     {name:'Русский A',lang:'ru-RU',voiceURI:'ru-a'},
     {name:'Русский B',lang:'ru-RU',voiceURI:'ru-b'},
@@ -21,11 +22,14 @@ test('question waits out grace and browser TTS owns the handoff to answer mode',
   const context = {document:{getElementById:element, createElement:makeNode, createTextNode:text=>({textContent:text})},
     window:{speechSynthesis:tts}, speechSynthesis:tts, SpeechSynthesisUtterance:function(text){this.text=text;},
     setInterval(){}, setTimeout:(fn,ms)=>{timers.push({fn,ms}); return timers.length;}, clearTimeout(){},
-    performance:{now:()=>0}, Date, console, fetch:async()=>({ok:true,json:async()=>({})})};
+    performance:{now:()=>0}, Date, console, fetch:async(path)=>{ requests.push(path); return {ok:true,json:async()=>({})}; }};
   vm.runInNewContext(source + '\nglobalThis.renderForTest = render; globalThis.setModeForTest = value => mode = value;', context);
   const status = (number, text, wait, retracted=false) => ({phase:'live', audio_seconds:1, integration:{
     question:{number,followUpNumber:text.startsWith('Уточнение')?1:0,text,level:'Стажёр',topic:'Java'},
     question_wait_ms:wait,decision_retracted:retracted}});
+  context.setModeForTest('preparing');
+  context.renderForTest(status(1, 'Первый вопрос', 0));
+  assert.equal(utterances.length, 0);
   context.setModeForTest('live');
   context.renderForTest(status(1, 'Первый вопрос', 0));
   assert.equal(element('question').textContent, 'Первый вопрос');
@@ -33,7 +37,12 @@ test('question waits out grace and browser TTS owns the handoff to answer mode',
   assert.equal(utterances.length, 1);
   assert.equal(utterances[0].text, 'Первый вопрос');
   assert.equal(utterances[0].voice.name, 'Русский A');
-  assert.equal(timers.length, 0);
+  assert.equal(timers.length, 1); // Контроль отсутствия ответа браузерного TTS.
+  const awaiting = status(1, 'Первый вопрос', 0);
+  awaiting.integration.question_pending = true;
+  context.renderForTest(awaiting);
+  assert.equal(utterances.length, 1);
+  assert.equal(element('skip').disabled, true);
   context.renderForTest(status(1, 'Уточнение', 900));
   assert.equal(element('question').textContent, 'Уточнение');
   assert.equal(element('asked').disabled, true);
@@ -56,6 +65,22 @@ test('question waits out grace and browser TTS owns the handoff to answer mode',
   assert.equal(utterances.length, beforeManualQuestion);
   assert.equal(element('asked').hidden, false);
   assert.equal(element('asked').disabled, false);
+
+  element('tts-enabled').checked = true;
+  context.renderForTest(status(5, 'Пятый вопрос', 0));
+  const stuckUtterance = utterances.at(-1);
+  const watchdog = timers.at(-1);
+  assert.ok(watchdog.ms >= 30000);
+  watchdog.fn();
+  assert.equal(element('asked').hidden, false);
+  context.renderForTest(status(5, 'Пятый вопрос', 0));
+  assert.equal(element('asked').hidden, false, 'ручное продолжение сохраняется при опросе');
+  await element('asked').onclick();
+  const readyCount = requests.filter(path => path === '/api/question/asked').length;
+  stuckUtterance.onend(); // Опоздавший callback не должен открывать ответ.
+  assert.equal(requests.filter(path => path === '/api/question/asked').length, readyCount);
+  context.renderForTest(status(5, 'Пятый вопрос', 0));
+  assert.equal(element('asked').disabled, true, 'повторное подтверждение отключено');
 
   context.renderForTest({phase:'finished', integration:{excel:{file:'interview.xlsx',url:'/api/reports/interview.xlsx'},report:{
     total:7.5, verdict:'Хорошо', answeredQuestions:2, plannedQuestions:2, finishedEarly:false,

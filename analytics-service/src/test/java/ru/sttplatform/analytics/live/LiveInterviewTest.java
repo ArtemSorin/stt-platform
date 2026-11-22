@@ -276,8 +276,10 @@ class LiveInterviewTest {
 
         feed(r, false, 8);                                   // 0,4 с тишины — ещё в окне отмены
         assertEquals(0, r.count("retract"));
+        assertEquals(0, r.count("grace_complete"));
         feed(r, true, 40);                                   // человек продолжает ответ
         assertEquals(1, r.count("retract"), "решение должно быть отменено");
+        assertEquals(0, r.count("grace_complete"), "отменённое решение не подтверждается");
         @SuppressWarnings("unchecked")
         Map<String, Object> back = (Map<String, Object>) r.last("retract").get("question");
         assertEquals(Boolean.FALSE, back.get("followUp"));
@@ -300,9 +302,12 @@ class LiveInterviewTest {
         r.live.start();
         speak(r, 60);
         assertEquals(1000, r.last("question").get("graceMs"));
+        assertEquals(0, r.count("grace_complete"));
         feed(r, false, 40);                                  // 2 с тишины
         assertEquals(0, r.count("retract"));
         assertEquals(1, r.count("decision"));
+        assertEquals(1, r.count("grace_complete"));
+        assertEquals(r.last("decision").get("answerId"), r.last("grace_complete").get("answerId"));
     }
 
     @Test

@@ -255,6 +255,38 @@ class OrchestratorPipelineTest {
     }
 
     @Test
+    void question_waits_for_matching_audio_grace_confirmation() throws Exception {
+        provideQuestion();
+        orchestrator.questionAsked();
+        push("decision", "answerId", 1, "attemptId", 1, "action", "NEXT_QUESTION", "audioSample", 0);
+        push("question", "questionId", "Q2", "text", "Второй вопрос", "graceMs", 1000);
+        assertTrue(await(() -> Boolean.TRUE.equals(orchestrator.status().get("question_pending")), 3000));
+        assertThrows(IllegalStateException.class, () -> orchestrator.questionAsked());
+        assertThrows(IllegalStateException.class, () -> orchestrator.questionSkipped());
+        push("grace_complete", "answerId", 99);
+        assertTrue(await(() -> ((Map<?, ?>) orchestrator.status().get("question")).get("text").equals("Что такое JVM?"), 3000));
+        push("grace_complete", "answerId", 1);
+        assertTrue(await(() -> Boolean.FALSE.equals(orchestrator.status().get("question_pending"))
+                && ((Map<?, ?>) orchestrator.status().get("question")).get("text").equals("Второй вопрос"), 3000));
+    }
+
+    @Test
+    void retracted_pending_question_cannot_be_unlocked_by_late_confirmation() throws Exception {
+        provideQuestion();
+        orchestrator.questionAsked();
+        push("decision", "answerId", 1, "attemptId", 1, "action", "NEXT_QUESTION", "audioSample", 0);
+        push("question", "questionId", "Q2", "text", "Второй вопрос", "graceMs", 1000);
+        push("retract", "reason", "speech_resumed",
+                "question", Map.of("text", "Что такое JVM?", "followUp", false));
+        assertTrue(await(() -> Boolean.TRUE.equals(orchestrator.status().get("decision_retracted")), 3000));
+        push("grace_complete", "answerId", 1);
+        push("decision", "answerId", 2, "attemptId", 1, "action", "NEXT_QUESTION", "audioSample", 0);
+        assertTrue(await(() -> Boolean.TRUE.equals(orchestrator.status().get("question_pending")), 3000));
+        assertEquals("Что такое JVM?", ((Map<?, ?>) orchestrator.status().get("question")).get("text"));
+        assertEquals(true, orchestrator.status().get("decision_retracted"));
+    }
+
+    @Test
     void decision_and_retract_from_analytics_are_reflected_in_the_status() throws Exception {
         provideQuestion();
         orchestrator.questionAsked();

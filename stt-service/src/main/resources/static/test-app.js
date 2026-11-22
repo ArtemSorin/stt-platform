@@ -2,6 +2,7 @@ const $ = id => document.getElementById(id);
 let stream, context, source, worklet, sessionId;
 let mode = 'idle', captureEnabled = false, sequence = 0, pending = Promise.resolve();
 let polling = false, questionKey = '', scheduledQuestion = '', questionTimer, finishRequested = false, stopResolver;
+let ttsGeneration = 0, ttsWatchdog;
 
 async function request(path, body, headers = {}) {
   const response = await fetch(path, {method: body === undefined ? 'GET' : 'POST', body,
@@ -19,6 +20,7 @@ function log(message) {
 }
 function questionId(question) { return `${question.number}|${question.followUpNumber}|${question.text}`; }
 function cleanup() {
+  ++ttsGeneration; clearTimeout(ttsWatchdog);
   captureEnabled = false;
   clearTimeout(questionTimer);
   stream?.getTracks().forEach(track => { track.onended = null; track.stop(); });
@@ -28,6 +30,7 @@ function cleanup() {
   stream = context = source = worklet = undefined;
 }
 async function start() {
+  questionKey = ''; scheduledQuestion = ''; clearTimeout(questionTimer);
   $('start').disabled = true;
   $('error').classList.add('hidden'); $('log').replaceChildren();
   try {
@@ -73,11 +76,14 @@ async function askQuestion(question) {
   $('asked').classList.add('hidden'); captureEnabled = false;
   $('status').textContent = 'Озвучивается вопрос';
   const utterance = new SpeechSynthesisUtterance(question.spoken || question.text);
+  const expectedKey = questionKey, generation = ++ttsGeneration;
+  let completed = false;
   utterance.lang = 'ru-RU';
   utterance.onstart = () => request('/api/tts/event', JSON.stringify({event:'start',question:question.text}),
     {'Content-Type':'application/json'}).catch(error => showError(error.message));
   const ready = async event => {
-    if (mode !== 'live') return;
+    if (completed || generation !== ttsGeneration || expectedKey !== questionKey || mode !== 'live') return;
+    completed = true; clearTimeout(ttsWatchdog);
     request('/api/tts/event', JSON.stringify({event,question:question.text}), {'Content-Type':'application/json'})
       .catch(error => showError(error.message));
     try {
@@ -85,11 +91,21 @@ async function askQuestion(question) {
       await request('/api/question/asked', new Uint8Array());
       captureEnabled = true; $('status').textContent = 'Слушаю ответ'; $('skip').disabled = false;
       log('Вопрос задан, начался приём ответа.');
-    } catch (error) { showError(error.message); }
+    } catch (error) {
+      showError(error.message); $('asked').classList.remove('hidden'); $('asked').disabled = false;
+    }
+  };
+  const manualRecovery = () => {
+    if (completed || generation !== ttsGeneration || expectedKey !== questionKey || mode !== 'live') return;
+    completed = true; clearTimeout(ttsWatchdog);
+    speechSynthesis.cancel();
+    $('asked').classList.remove('hidden'); $('asked').disabled = false; $('skip').disabled = false;
+    $('status').textContent = 'Задайте вопрос и подтвердите вручную.';
   };
   utterance.onend = () => ready('finish');
-  utterance.onerror = () => ready('error');
+  utterance.onerror = manualRecovery;
   speechSynthesis.cancel(); speechSynthesis.speak(utterance);
+  ttsWatchdog = setTimeout(manualRecovery, Math.max(30000, (question.spoken || question.text).length * 250));
 }
 function render(state) {
   const phase = state.phase || 'idle', integration = state.integration || {};
@@ -115,7 +131,10 @@ function render(state) {
       log(`Поступил вопрос ${question.number || ''}.`);
     }
     const wait = integration.question_wait_ms || 0;
-    if (integration.decision_retracted) {
+    if (integration.question_pending) {
+      clearTimeout(questionTimer); $('asked').disabled = true; $('skip').disabled = true;
+      $('status').textContent = 'Проверяем окончание ответа кандидата.';
+    } else if (integration.decision_retracted) {
       clearTimeout(questionTimer); scheduledQuestion = key; captureEnabled = true;
       $('status').textContent = 'Ответ продолжается; решение отменено.';
     } else if (wait > 0 && scheduledQuestion !== key) {

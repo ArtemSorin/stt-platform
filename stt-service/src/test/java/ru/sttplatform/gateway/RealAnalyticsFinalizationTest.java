@@ -63,6 +63,7 @@ class RealAnalyticsFinalizationTest {
                     "s", true, new IntegrationProperties(null, null), whisper, true, "", false,
                     directory.resolve("spool"), true)) {
                 assertTrue(await(() -> orchestrator.status().get("question") != null, 5000));
+                Object firstQuestion = ((java.util.Map<?, ?>) orchestrator.status().get("question")).get("questionId");
                 orchestrator.questionAsked();
                 assertTrue(await(() -> sent.stream().anyMatch(e -> "ready".equals(e.path("type").asText())), 5000));
                 byte[] voiced = new byte[1600];
@@ -83,6 +84,14 @@ class RealAnalyticsFinalizationTest {
                     assertTrue(await(() -> String.valueOf(orchestrator.status().get("mixed_transcript")).contains("резерв"), 3000));
                 }
                 assertTrue(await(() -> orchestrator.status().get("decision") != null, 10000));
+                // Настоящие analytics и gateway проходят окно на общей шкале аудио.
+                for (int i = 0; i < 40; i++) {
+                    orchestrator.submit(position, new byte[1600]);
+                    position += 800;
+                }
+                assertTrue(await(() -> Boolean.FALSE.equals(orchestrator.status().get("question_pending"))
+                        && !firstQuestion.equals(((java.util.Map<?, ?>) orchestrator.status().get("question")).get("questionId")), 10000),
+                        "следующий вопрос должен открыться после обработанного окна отмены");
                 orchestrator.finish(5, List.of());
                 assertNull(orchestrator.status().get("bridge_error"));
                 assertTrue(sent.stream().anyMatch(e -> "final_answer".equals(e.path("type").asText())
