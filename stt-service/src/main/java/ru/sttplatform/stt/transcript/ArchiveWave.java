@@ -23,7 +23,7 @@ public final class ArchiveWave {
      * @throws IOException если запись неполна либо не может быть сохранена
      */
     public static void write(Path pcm, Path destination, int channels, long samples) throws IOException {
-        if ((channels != 1 && channels != 2) || samples < 0 || samples > (0xffffffffL - 36) / (channels * 2L))
+        if ((channels != 1 && channels != 2) || samples <= 0 || samples > (0xffffffffL - 36) / (channels * 2L))
             throw new IOException("Недопустимый формат или размер WAV");
         long length = samples * channels * 2L;
         if (Files.size(pcm) != length) throw new IOException("Размер PCM не совпадает с числом сэмплов");

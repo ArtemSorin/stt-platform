@@ -32,6 +32,7 @@ class ArchiveWaveTest {
         Path source = directory.resolve("input.pcm"), target = directory.resolve("audio.wav");
         Files.write(source, new byte[]{1, 2, 3, 4});
         assertThrows(java.io.IOException.class, () -> ArchiveWave.write(source, target, 2, 2));
+        assertThrows(java.io.IOException.class, () -> ArchiveWave.write(source, target, 2, 0));
         assertFalse(Files.exists(target));
         assertEquals(4, Files.size(source));
     }
