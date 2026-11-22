@@ -8,6 +8,7 @@ HIDE_PERSON_SPRITE()
 HIDE_STEREOTYPE()
 
 Person(candidate, "Кандидат", "Проходит интервью")
+Person(interviewer, "Интервьюер", "Проводит интервью и получает результаты")
 Container_Ext(browser, "Браузер", "HTML / JavaScript", "Захват эталона и PCM16; /test.html — тестовый режим без диаризации")
 
 System_Boundary(platform, "stt-platform · локальная машина") {
@@ -16,18 +17,24 @@ System_Boundary(platform, "stt-platform · локальная машина") {
     Container(whisper, "Whisper helper · optional", "Python · :9000", "Уточнение ответов и итоговая транскрипция faster-whisper small.")
     Container(frida, "FRIDA helper · optional", "Python · :9100", "Семантическая оценка; локальная модель не проверялась.")
     ContainerDb(models, "Артефакты моделей", "Файлы вне Git", "Vosk, Nemotron, CAM++, Whisper и FRIDA (если установлена).")
-    ContainerDb(reports, "XLSX-отчёты", "Локальные файлы", "Создаются аналитикой; STT проксирует скачивание в браузер.")
-    ContainerDb(transcripts, "Транскрипции", "Временный PCM и локальные MD/ZIP", "STT сохраняет два канала; после интервью публикует текст по ролям.")
+    ContainerDb(reports, "Рабочая очередь отчётов", "Постоянный том Compose", "XLSX ожидает подтверждённой архивации в S3.")
+    ContainerDb(transcripts, "Рабочие файлы STT", "Постоянный диск Windows", "PCM и MD/ZIP сохраняются локально до архивации.")
+    ContainerDb(database, "Реестр интервью и банк", "PostgreSQL · Compose", "Неизменяемые версии банка, интервью и метаданные файлов.")
+    ContainerDb(objects, "Архив", "S3 API · SeaweedFS в Compose", "Приватный WAV, XLSX, транскрипции и данные для повтора.")
 }
 
 Rel_R(candidate, browser, "интервью")
+Rel_R(interviewer, browser, "управляет интервью")
 Rel_R(browser, stt, "HTTP API · PCM16 16 кГц, два канала")
 Rel_R(stt, analytics, "внутренний /ws/interview-events · JSON в обе стороны")
 Rel_D(stt, whisper, "HTTP · части ответа и итоговые части обоих каналов")
 Rel_D(stt, transcripts, "временная запись, затем MD и ZIP")
 Rel_D(analytics, frida, "HTTP · JSON оценки")
 Rel_D(analytics, reports, "сохраняет отчёт")
-Rel_D(stt, models, "Vosk / Nemotron / CAM++")
+Rel_D(analytics, database, "банк и реестр")
+Rel_D(analytics, objects, "очередь и архив XLSX")
+Rel_D(stt, objects, "очередь: WAV и журналы")
+Rel_D(stt, analytics, "внутренний HTTP: регистрация и получение результатов")
 Rel_D(whisper, models, "faster-whisper")
 Rel_D(frida, models, "FRIDA, если установлена")
 

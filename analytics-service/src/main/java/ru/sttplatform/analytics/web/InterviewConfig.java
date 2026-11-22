@@ -18,6 +18,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 /**
  * Создаёт банк знаний и политику принятия решений для интервью.
@@ -51,6 +52,14 @@ public class InterviewConfig {
                 .withSpoken(SpokenText.parse(load(p.spokenPath(), "interview/spoken.txt")));
         kb.warmUp(30);   // прогрев JIT: первое реальное решение не должно быть «холодным»
         return kb;
+    }
+
+    static InterviewKnowledge catalogKnowledge(InterviewProperties properties, List<QuestionCatalog.Entry> entries) throws IOException {
+        InterviewKnowledge knowledge = InterviewKnowledge.build(QuestionCatalog.toQuestions(entries),
+                        Glossary.parse(load(properties.glossaryPath(), "interview/glossary.txt")))
+                .withSpoken(SpokenText.parse(load(properties.spokenPath(), "interview/spoken.txt")));
+        knowledge.warmUp(30);
+        return knowledge;
     }
 
     /**

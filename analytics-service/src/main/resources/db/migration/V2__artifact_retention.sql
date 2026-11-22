@@ -1,0 +1,1 @@
+ALTER TABLE archive_artifact ADD COLUMN deleting BOOLEAN NOT NULL DEFAULT FALSE;

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.sttplatform.common.audio.Pcm;
+import ru.sttplatform.common.archive.ArchiveQueue;
 import ru.sttplatform.common.json.Json;
 import ru.sttplatform.common.ws.WsPeer;
 import ru.sttplatform.stt.integration.EndpointDetector;
@@ -13,6 +14,7 @@ import ru.sttplatform.stt.transcript.PostInterviewWhisper;
 import ru.sttplatform.stt.transcript.InterviewAudioSpool;
 import ru.sttplatform.stt.transcript.FinalTranscriptBuilder;
 import ru.sttplatform.stt.transcript.LiveWhisperChunks;
+import ru.sttplatform.stt.transcript.ArchiveWave;
 
 import java.io.BufferedWriter;
 import java.nio.charset.StandardCharsets;
@@ -26,6 +28,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.HashMap;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -43,6 +46,37 @@ import java.util.function.Consumer;
  */
 public final class Orchestrator implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(Orchestrator.class);
+    private ArchiveQueue archiveQueue;
+
+    /** Настраивает постоянную очередь архива.
+     * @param queue очередь или null, если архив отключён */
+    public void setArchiveQueue(ArchiveQueue queue) { this.archiveQueue = queue; }
+
+    /** Ставит закрытые журналы и данные распознавания в очередь для последующего повтора. */
+    public void archiveReplayInputs() {
+        if (archiveQueue == null) return;
+        try {
+            UUID id = UUID.fromString(sessionId);
+            Path input = directory.resolve("archive-inputs.json");
+            Json.MAPPER.writeValue(input.toFile(), Json.map("sessionId", sessionId, "channels", separateChannels ? 2 : 1,
+                    "sampleRate", RATE, "samples", capturedSamples, "testMode", testMode,
+                    "words", finalWords, "roles", finalDiarizationSpans));
+            archiveQueue.submit(id, "replay_inputs_json", input);
+            for (String name : List.of("interview-events", "stt-events", "timeline-events")) {
+                Path journalPath = directory.resolve(name + ".jsonl");
+                if (Files.isRegularFile(journalPath)) archiveQueue.submit(id, name.replace('-', '_') + "_jsonl", journalPath);
+            }
+        } catch (Exception error) { log.error("Не удалось подготовить данные повтора для архива", error); }
+    }
+
+    /** Разрешает удалить локальный PCM и WAV после подтверждения архивации. */
+    public void releaseArchivedAudio() {
+        if (archiveQueue == null || audioSpool == null) return;
+        try {
+            archiveQueue.release(UUID.fromString(sessionId), separateChannels ? "audio_wav" : "audio_mono_wav",
+                    List.of(audioSpool.path(), directory.resolve("archive-audio.wav")));
+        } catch (Exception error) { log.warn("Исходная запись оставлена на диске: {}", error.toString()); }
+    }
     private static final int RATE = Pcm.RATE;
     private static final int HOLD_SAMPLES = RATE;
     // Длинная непрерывная речь может получить окончательную роль только после паузы.
@@ -1370,6 +1404,7 @@ public final class Orchestrator implements AutoCloseable {
                 logQuietly(Json.map("type", "bridge_error", "worker", "final_flush", "error", failure));
             }
         }
+        archiveCapturedAudio();
         try {
             signalEnd(sttQueue, sttWorker, "Vosk");
             sttWorker.join(30_000);
@@ -1422,6 +1457,31 @@ public final class Orchestrator implements AutoCloseable {
         } else if (audioSpool == null && transcriptError == null)
             transcriptError = "Whisper выключен: полная транскрипция недоступна.";
         synchronized (this) { writeSummary(reportReceived.getCount() == 0 && failure == null); }
+    }
+
+    private void archiveCapturedAudio() {
+        if (archiveQueue == null) return;
+        String kind = separateChannels ? "audio_wav" : "audio_mono_wav";
+        try {
+            archiveQueue.finish(UUID.fromString(sessionId));
+            if (audioSpool == null || transcriptError != null) {
+                archiveQueue.markInvalid(UUID.fromString(sessionId), kind);
+                return;
+            }
+            audioSpool.seal(capturedSamples);
+            Path wave = directory.resolve("archive-audio.wav");
+            ArchiveWave.write(audioSpool.path(), wave, audioSpool.channels(), capturedSamples);
+            archiveQueue.submit(UUID.fromString(sessionId), kind, wave);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            transcriptError = "Архивация аудио прервана";
+            log.error(transcriptError, error);
+        } catch (Exception error) {
+            try { archiveQueue.markInvalid(UUID.fromString(sessionId), kind); }
+            catch (Exception ignored) { log.warn("Не удалось сохранить статус ошибки архива"); }
+            transcriptError = "Не удалось подготовить аудиозапись к архивации: " + error.getMessage();
+            log.error(transcriptError, error);
+        }
     }
 
     private void finishDeferred() {

@@ -35,6 +35,8 @@ import java.util.Set;
  */
 @RestController
 public class BrowserApiController {
+    @org.springframework.beans.factory.annotation.Value("${archive.enabled:false}")
+    private boolean archiveEnabled;
     /** Максимум байт одного аудиозапроса: 0,64 с PCM16 16 кГц. */
     private static final int MAX_AUDIO_BYTES = 2 * 10240;
     private static final int MAX_CHANNEL_AUDIO_BYTES = 2 * MAX_AUDIO_BYTES;
@@ -276,6 +278,7 @@ public class BrowserApiController {
      */
     @GetMapping("/api/reports/{name:.+}")
     public ResponseEntity<byte[]> report(@PathVariable String name) {
+        if (archiveEnabled) return ResponseEntity.notFound().build();
         try {
             HttpResponse<byte[]> reply = http.send(HttpRequest.newBuilder(
                             URI.create(analyticsUrl + "/api/reports/" + java.net.URLEncoder.encode(name, StandardCharsets.UTF_8).replace("+", "%20")))

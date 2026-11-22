@@ -7,6 +7,43 @@ on:
     branches: [master]
 
 jobs:
+  archive-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.6
+        env:
+          POSTGRES_DB: catalog_test
+          POSTGRES_USER: catalog_test
+          POSTGRES_PASSWORD: catalog_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U catalog_test -d catalog_test"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Start S3 and wait for readiness
+        run: |
+          docker run -d --name archive-s3 -p 127.0.0.1:8333:8333 -e AWS_ACCESS_KEY_ID=local-test-key -e AWS_SECRET_ACCESS_KEY=local-test-secret chrislusf/seaweedfs:4.05 mini -dir=/data
+          for attempt in $(seq 1 30); do
+            status=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8333/ || true)
+            if [ "$status" = "403" ]; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+      - name: PostgreSQL and S3 integration tests
+        env:
+          CATALOG_TEST_JDBC_URL: jdbc:postgresql://127.0.0.1:5432/catalog_test
+          CATALOG_TEST_JDBC_USER: catalog_test
+          CATALOG_TEST_JDBC_PASSWORD: catalog_test
+          ARCHIVE_TEST_S3_ENDPOINT: http://127.0.0.1:8333
+        run: mvn --batch-mode --no-transfer-progress -pl analytics-service -am test -Dtest=ArchiveQueueTest,CatalogStoreTest -Dsurefire.failIfNoSpecifiedTests=false
+
   verify:
     runs-on: windows-latest
     steps:

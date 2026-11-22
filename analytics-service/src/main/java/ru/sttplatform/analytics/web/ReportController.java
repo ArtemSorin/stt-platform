@@ -22,6 +22,8 @@ import java.nio.file.Path;
 @RestController
 @RequestMapping("/api/reports")
 public class ReportController {
+    @org.springframework.beans.factory.annotation.Value("${archive.enabled:false}")
+    private boolean archiveEnabled;
 
     private static final String XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
@@ -44,6 +46,7 @@ public class ReportController {
      */
     @GetMapping("/{name:.+}")
     public ResponseEntity<Resource> download(@PathVariable String name) {
+        if (archiveEnabled) return ResponseEntity.notFound().build();
         Path file = reports.find(name);
         if (file == null) return ResponseEntity.notFound().build();
         ContentDisposition cd = ContentDisposition.attachment().filename(file.getFileName().toString(), StandardCharsets.UTF_8).build();

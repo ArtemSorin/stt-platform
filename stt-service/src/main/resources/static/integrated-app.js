@@ -145,6 +145,7 @@ function render(status) {
   if (integration.bridge_error) showError(integration.bridge_error);
   if (integration.candidate_warning) showError(integration.candidate_warning);
   window.transcriptView?.update(phase, integration.transcripts, integration.transcript_error, status.session_id, integration.transcript_progress);
+  window.archiveView?.update(status.session_id);
   renderTranscript(integration);
   renderFinalReport(integration.report, integration.excel, phase);
   // При каждом обновлении состояния заново собираем строку, чтобы предупреждения не накапливались.

@@ -10,11 +10,91 @@ servers:
     description: Локальная разработка
 security: []
 tags:
+  - name: Внутренний архив
+    description: Доступ только по внутреннему токену; API не предназначено для браузера.
   - name: Отчёты
     description: Скачивание созданных XLSX-файлов.
   - name: Диагностика FRIDA
     description: Состояние клиента модели и локальная самопроверка.
 paths:
+  /internal/archive/interviews/{id}:
+    get:
+      tags: [Внутренний архив]
+      operationId: internalArchiveFind
+      summary: Получить реестровую запись
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: X-Internal-Token, in: header, required: true, schema: {type: string}}
+      responses:
+        '200': {description: 'Версия банка, статус и метаданные зарегистрированных файлов'}
+        '403': {description: Неверный токен}
+        '404': {description: Интервью не найдено}
+  /internal/archive/interviews/{id}/bind:
+    put:
+      tags: [Внутренний архив]
+      operationId: internalArchiveBind
+      summary: Создать интервью с текущей версией банка или сохранить прежнюю привязку
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: X-Internal-Token, in: header, required: true, schema: {type: string}}
+      responses:
+        '200': {description: Привязка создана или существовала}
+        '403': {description: Неверный токен}
+  /internal/archive/interviews/{id}/finish:
+    put:
+      tags: [Внутренний архив]
+      operationId: internalArchiveFinish
+      summary: Зафиксировать завершение захвата
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: X-Internal-Token, in: header, required: true, schema: {type: string}}
+      responses:
+        '200': {description: Захват завершён}
+        '403': {description: Неверный токен}
+  /internal/archive/interviews/{id}/artifacts:
+    put:
+      tags: [Внутренний архив]
+      operationId: internalArchiveRegister
+      summary: Зарегистрировать проверенный объект
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: X-Internal-Token, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, objectKey, sizeBytes, sha256]
+              properties:
+                kind: {type: string}
+                objectKey: {type: string}
+                sizeBytes: {type: integer, minimum: 0}
+                sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+      responses:
+        '200': {description: Объект зарегистрирован или уже зарегистрирован с теми же метаданными}
+        '403': {description: Неверный токен}
+        '500': {description: Конфликт либо ошибка реестра}
+  /internal/archive/catalog:
+    post:
+      tags: [Внутренний архив]
+      operationId: internalArchivePublishCatalog
+      summary: Проверить и опубликовать две TSV-таблицы
+      parameters:
+        - {name: X-Internal-Token, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [questions, followups]
+              properties:
+                questions: {type: string}
+                followups: {type: string}
+      responses:
+        '200': {description: Идентификатор опубликованной версии}
+        '403': {description: Неверный токен}
   /api/reports/{name}:
     get:
       tags: [Отчёты]

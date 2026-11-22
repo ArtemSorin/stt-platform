@@ -11,6 +11,20 @@
 
 ## Архитектура
 
+Пилотный архив: PostgreSQL, SeaweedFS и аналитика работают в Compose, STT остаётся на Windows. Версия банка привязана к интервью; WAV и результаты отправляются через локальную очередь. [Запуск и ограничения архива](docs/archive-pilot.md).
+
+```mermaid
+flowchart LR
+    Browser[Браузер на Windows] -->|PCM и команды| STT[STT на Windows]
+    STT -->|события и реестр| Analytics[Аналитика в Compose]
+    Analytics --> DB[(PostgreSQL: версии и реестр)]
+    STT -->|аудио и журналы| S3[(Приватное S3)]
+    Analytics -->|XLSX| S3
+    STT --> Disk[(Рабочий диск и очередь)]
+    STT --> Whisper[Whisper: опционально]
+    Analytics --> FRIDA[FRIDA: опционально]
+```
+
 ![C4 Container: stt-platform](docs/diagrams/stt-platform-c4.png)
 
 Диаграмма показывает оба запускаемых сервиса, библиотеку `common`, локальные помощники моделей и файлы моделей. [Исходник PlantUML](docs/diagrams/stt-platform-c4.puml) можно открыть и изменить на [plantuml.online](https://plantuml.online/); тот же PNG можно скачать отдельно для Miro: [C4-схема](docs/diagrams/stt-platform-c4.png). Точные идентификаторы и подтверждённые версии моделей приведены в [реестре моделей](docs/models.md).

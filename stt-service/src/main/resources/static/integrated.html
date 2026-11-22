@@ -89,6 +89,15 @@
     </section>
     <p class="footnote">Для микрофона запрашивается эхоподавление. Если при работе с колонками слышно эхо, уменьшите их громкость или используйте наушники. JSON-события выводятся в терминале IntelliJ и сохраняются в отдельной папке интервью.</p>
   </main>
+  <section id="archive-result" class="card" hidden aria-live="polite">
+    <h2>Архив интервью</h2>
+    <p>Версия банка: <span id="archive-version"></span>. Звонок: <span id="archive-call"></span>.</p>
+    <p>Запись: <span id="archive-audio"></span>. Отчёт: <span id="archive-report"></span>.</p>
+    <a id="archive-audio-link" hidden>Скачать запись</a>
+    <a id="archive-report-link" hidden>Скачать отчёт</a>
+    <a id="archive-link">Ссылка на интервью</a>
+  </section>
+  <script src="/archive-view.js"></script>
   <script src="/transcript-view.js"></script>
   <script type="module" src="/integrated-app.js"></script>
 </body>
