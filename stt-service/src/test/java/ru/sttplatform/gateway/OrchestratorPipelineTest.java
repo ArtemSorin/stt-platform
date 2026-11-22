@@ -225,6 +225,8 @@ class OrchestratorPipelineTest {
 
         feed(new byte[FRAME_BYTES], 4);                      // 200 мс тишины
         sendSystemWords();
+        assertTrue(await(() -> partialText.equals(orchestrator.status().get("mixed_transcript")), 3000),
+                "тестовые слова Vosk должны попасть в общую временную шкалу до подачи речи");
         feed(voiced(), 30);                                  // 1,5 с речи
         long silenceStart = System.nanoTime();
         feed(new byte[FRAME_BYTES], 12);                     // 600 мс тишины → мягкий конец на 450 мс

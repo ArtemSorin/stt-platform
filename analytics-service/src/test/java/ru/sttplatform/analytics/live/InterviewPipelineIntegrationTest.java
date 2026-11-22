@@ -42,7 +42,7 @@ class InterviewPipelineIntegrationTest {
         });
         server.start();
         return new FridaJudge(new JudgeProperties(true, "http://127.0.0.1:" + server.getAddress().getPort(), "sidecar", null,
-                2000, 5000, 8000, 1800, true, 3, 5000, 16, null, null, null, null, null, null));
+                2000, 5000, 8000, 1800, true, 3, 60_000, 16, null, null, null, null, null, null));
     }
 
     /** Кадры в «реальном» темпе 2 мс/кадр, чтобы HTTP-ответ успевал прийти между кадрами. */
@@ -52,6 +52,19 @@ class InterviewPipelineIntegrationTest {
             sim.frame(false, "", "");
             Thread.sleep(2);
         }
+    }
+
+    /** Дожидается завершения уже отправленных запросов перед проверкой состояния circuit breaker. */
+    private static void awaitJudgeRequestsSettled(FridaJudge judge) throws InterruptedException {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(3);
+        while (System.nanoTime() < deadline) {
+            Map<String, Object> stats = judge.stats();
+            if (((Number) stats.get("calls")).longValue() == ((Number) stats.get("failures")).longValue()) return;
+            Thread.sleep(10);
+        }
+        Map<String, Object> stats = judge.stats();
+        assertEquals(((Number) stats.get("calls")).longValue(), ((Number) stats.get("failures")).longValue(),
+                "все ошибочные HTTP-запросы FRIDA должны завершиться до проверки автомата отказов");
     }
 
     @Test
@@ -98,7 +111,8 @@ class InterviewPipelineIntegrationTest {
         }
         // после серии сбоев автомат отказов выключает модель — новые запросы не уходят
         assertFalse(judge.ready());
-        // HTTP-сервер может получить ранее отправленный запрос после проверки ready().
+        // Учитываем завершение запросов, отправленных до открытия circuit breaker.
+        awaitJudgeRequestsSettled(judge);
         long sent = ((Number) judge.stats().get("calls")).longValue();
         sim.ready();
         sim.silence(200);
