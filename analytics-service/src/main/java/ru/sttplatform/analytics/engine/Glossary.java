@@ -35,9 +35,9 @@ public final class Glossary {
     }
 
     /**
-     * Возвращает текущее значение без изменения состояния.
+     * Возвращает записи словаря терминов и их вариантов.
      *
-     * @return список результатов
+     * @return записи словаря терминов и их вариантов
      */
     public List<Entry> entries() {
         return entries;
@@ -46,8 +46,8 @@ public final class Glossary {
     /**
      * Разбирает словарь речевых вариантов и видов терминов.
      *
-     * @param text текст ответа или документа
-     * @return результат операции
+     * @param text содержимое файла словаря
+     * @return словарь разобранных терминов
      */
     public static Glossary parse(String text) {
         List<Entry> out = new ArrayList<>();

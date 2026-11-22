@@ -44,8 +44,8 @@ public final class Tokenizer {
     /**
      * Определяет, исключается ли основа слова из анализа ответа.
      *
-     * @param stem параметр операции
-     * @return признак выполнения условия
+     * @param stem нормализованная основа слова
+     * @return {@code true}, если основа входит в список исключаемых слов
      */
     public static boolean isStop(String stem) {
         return STOP.contains(stem);
@@ -54,12 +54,11 @@ public final class Tokenizer {
     /**
      * Разбирает текст на слова.
      *
+     * @param text исходный текст для токенизации
      * @param hashes   выход: хеши основ
      * @param stems    выход (может быть null): строки основ
      * @param surfaces выход (может быть null): исходные слова в нижнем регистре
      * @return число токенов
-     * @param text текст ответа или документа
-     * @return целочисленное значение
      */
     public static int tokenize(CharSequence text, long[] hashes, String[] stems, String[] surfaces) {
         final int max = hashes.length;

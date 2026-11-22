@@ -1064,6 +1064,7 @@ public final class Orchestrator implements AutoCloseable {
         }
         if ("question".equals(type)) {
             if (data.path("graceMs").asLong() > 0) {
+                // Предварительный вопрос не должен попасть в браузер до проверки продолжения речи.
                 pendingQuestion = event;
                 pendingQuestionAnswerId = lastWhisperAnswerId;
                 questionPending = true;
@@ -1081,6 +1082,7 @@ public final class Orchestrator implements AutoCloseable {
         }
         if ("grace_complete".equals(type) && pendingQuestion != null
                 && data.path("answerId").asInt(-1) == pendingQuestionAnswerId) {
+            // Ответ связывает подтверждение с решением: позднее событие нельзя применить к другому вопросу.
             question = pendingQuestion;
             pendingQuestion = null;
             questionPending = false;

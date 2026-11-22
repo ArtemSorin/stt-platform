@@ -45,10 +45,10 @@ public final class DecisionPolicy {
     private final Thresholds thresholds;
 
     /**
-     * Создаёт объект с указанными зависимостями и настройками.
+     * Создаёт политику с заданными лимитами и порогами модели по умолчанию.
      *
-     * @param maxFollowUps параметр операции
-     * @param weakCoverage параметр операции
+     * @param maxFollowUps максимальное число уточнений на основной вопрос
+     * @param weakCoverage порог слабого покрытия эталона
      */
     public DecisionPolicy(int maxFollowUps, double weakCoverage) {
         this(maxFollowUps, weakCoverage, Thresholds.defaults());
@@ -142,9 +142,9 @@ public final class DecisionPolicy {
      * @param level уровень вопроса
      * @param a анализ ответа
      * @param prevCoverage покрытие предыдущей попытки
-     * @param followUpsUsed параметр операции
-     * @param asked параметр операции
-     * @param hits параметр операции
+     * @param followUpsUsed число уже заданных уточнений
+     * @param asked признаки уже заданных уточнений по их индексам
+     * @param hits признаки понятий эталона, найденных в ответе
      * @return выбранное действие и его причина
      */
     public Decision decide(CompiledQuestion q, Level level, AnswerAnalysis a, double prevCoverage,

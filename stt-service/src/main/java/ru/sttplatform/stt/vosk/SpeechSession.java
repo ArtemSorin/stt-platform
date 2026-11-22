@@ -38,7 +38,7 @@ public class SpeechSession implements AutoCloseable {
      */
     public record Event(String type, String text, List<Word> words) {
         /**
-         * Создаёт объект с указанными зависимостями и настройками.
+         * Создаёт событие без списка слов с временными метками.
          *
          * @param type тип события распознавания
          * @param text текст промежуточного или финального результата
@@ -52,7 +52,7 @@ public class SpeechSession implements AutoCloseable {
     private String lastPartial = "";
 
     /**
-     * Создаёт объект с указанными зависимостями и настройками.
+     * Создаёт Vosk-распознаватель с выводом временных меток слов.
      *
      * @param model загруженная модель Vosk
      * @param sampleRate частота отсчётов аудио

@@ -32,27 +32,27 @@ public record CompiledQuestion(Question question, int[] poolIds, double[] poolW,
     public record FollowUp(String text, int[] poolIdx) {}
 
     /**
-     * Возвращает текущее значение без изменения состояния.
+     * Возвращает идентификатор исходного вопроса.
      *
-     * @return целочисленное значение
+     * @return идентификатор исходного вопроса
      */
     public int id() {
         return question.id();
     }
 
     /**
-     * Возвращает текущее значение без изменения состояния.
+     * Возвращает уровень сложности исходного вопроса.
      *
-     * @return результат операции
+     * @return уровень сложности исходного вопроса
      */
     public Level level() {
         return question.level();
     }
 
     /**
-     * Возвращает текущее значение без изменения состояния.
+     * Возвращает число понятий в пуле эталона.
      *
-     * @return целочисленное значение
+     * @return число понятий в пуле эталона
      */
     public int poolSize() {
         return poolIds.length;

@@ -23,7 +23,7 @@ public final class ReportFiles {
      * (Linux в POSIX-локали, часть Docker-образов), имя транслитерируется: Interview_..._Ivan_Petrov.xlsx.
      * @param candidate имя кандидата
      * @param startedAt время начала интервью
-     * @return строка результата
+     * @return подготовленное имя XLSX-файла
      */
     public static String fileName(String candidate, Instant startedAt) {
         String who = candidate == null ? "" : candidate.trim().replaceAll("[^\\p{L}\\p{N}]+", "_").replaceAll("^_+|_+$", "");

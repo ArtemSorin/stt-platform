@@ -249,8 +249,8 @@ public final class InterviewSession {
     /**
      * «Примерка» решения: используется на мягком конце ответа — решение уже готово, но пока не принято,
      * и если человек продолжит говорить, ничего не нужно откатывать.
-     * @param text текст ответа или документа
-     * @return результат операции
+     * @param text текст ответа кандидата
+     * @return предварительный анализ и предполагаемое решение
      */
     public synchronized Peek peek(String text) {
         return peek(text, null);
@@ -518,9 +518,9 @@ public final class InterviewSession {
     }
 
     /**
-     * Выполняет операцию публичного контракта компонента.
+     * Возвращает ссылку на последнюю сохранённую попытку текущего интервью.
      *
-     * @return результат операции
+     * @return ссылка на попытку или {@code null}, если попыток ещё нет
      */
     public synchronized AttemptRef lastAttempt() {
         return lastAttempt == null ? null : new AttemptRef(lastRun, lastAttempt);
@@ -530,7 +530,7 @@ public final class InterviewSession {
      * Подменяет текст ответа более точным (финал Vosk → rank 1, Whisper → rank 2) и пересчитывает оценку этого вопроса.
      * Менее точный источник не затирает более точный.
      * @param ref ссылка на сохранённую попытку
-     * @param text текст ответа или документа
+     * @param text текст ответа кандидата
      * @param rank приоритет источника распознавания
      */
     public synchronized void refine(AttemptRef ref, String text, int rank) {
@@ -541,7 +541,7 @@ public final class InterviewSession {
      * Заменяет текст сохранённой попытки результатом более точного распознавания.
      *
      * @param ref ссылка на сохранённую попытку
-     * @param text текст ответа или документа
+     * @param text текст ответа кандидата
      * @param display текст для показа пользователю
      * @param rank приоритет источника распознавания
      */
@@ -555,7 +555,7 @@ public final class InterviewSession {
     }
 
     /**
-     * Возвращает текущее значение без изменения состояния.
+     * Возвращает банк знаний текущего интервью.
      *
      * @return подготовленный банк знаний
      */
@@ -684,7 +684,7 @@ public final class InterviewSession {
     /**
      * Проверяет, завершён ли список вопросов.
      *
-     * @return признак выполнения условия
+     * @return {@code true}, если список вопросов завершён
      */
     public synchronized boolean isFinished() {
         return finished;

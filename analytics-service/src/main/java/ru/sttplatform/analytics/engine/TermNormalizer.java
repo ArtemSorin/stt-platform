@@ -43,7 +43,7 @@ public final class TermNormalizer {
     private final List<java.util.Set<String>> latinSkeletons = new ArrayList<>();
 
     /**
-     * Создаёт объект с указанными зависимостями и настройками.
+     * Создаёт нормализатор по словарю терминов и их вариантов.
      *
      * @param glossary словарь терминов
      */
@@ -93,9 +93,9 @@ public final class TermNormalizer {
     /**
      * Нормализует технические термины в распознанном ответе.
      *
-     * @param text текст ответа или документа
-     * @param display текст для показа пользователю
-     * @return строка результата
+     * @param text распознанный текст ответа
+     * @param display применять ли режим замены для отображаемого текста
+     * @return текст с нормализованными терминами
      */
     public String normalize(String text, boolean display) {
         if (text == null || text.isEmpty()) return text;

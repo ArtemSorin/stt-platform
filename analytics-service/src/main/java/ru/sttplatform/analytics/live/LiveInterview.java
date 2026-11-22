@@ -63,9 +63,9 @@ public final class LiveInterview {
      */
     public record Timing(int nextExtraMs, int otherNextExtraMs, int followUpExtraMs, int graceMs) {
         /**
-         * Выполняет операцию публичного контракта компонента.
+         * Возвращает стандартные задержки переходов и окна отмены.
          *
-         * @return результат операции
+         * @return стандартные задержки переходов и окна отмены
          */
         public static Timing defaults() {
             return new Timing(150, 600, 1500, 1000);
@@ -145,7 +145,7 @@ public final class LiveInterview {
     private long lastRtfWarn;
 
     /**
-     * Создаёт объект с указанными зависимостями и настройками.
+     * Создаёт обработчик живого интервью с детектором и отправкой событий.
      *
      * @param speech речевой движок
      * @param interview состояние интервью
@@ -350,7 +350,7 @@ public final class LiveInterview {
     /**
      * Режим «в наушниках»: микрофон открыт уже во время озвучки вопроса, и клиент сообщает, когда она закончилась
      * (мс после «готов»). Время озвучки не считается задержкой ответа: скорость оценивается от конца вопроса.
-     * @param afterReadyMs параметр операции
+     * @param afterReadyMs длительность озвучки после сигнала готовности, мс
      */
     public void onTtsEnd(long afterReadyMs) {
         ttsEndMs = Math.max(0, afterReadyMs);
