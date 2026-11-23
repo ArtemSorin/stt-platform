@@ -17,8 +17,8 @@
 | `stt-service` | 8080 | Браузерный интерфейс и API; Vosk; запись эталона; Nemotron/CAM++; фильтрация речи по роли; локальный вызов Whisper. |
 | `analytics-service` | 8083 | Банк вопросов, состояния интервью, подсказки и решения, оценивание FRIDA, XLSX-отчёты. Получает события распознавания, не аудио. |
 | `common` | — | Общие типы PCM, JSON и WebSocket-клиент. Maven-модуль библиотеки, отдельно не запускается. |
-| Whisper helper | 9000 | Python HTTP-сервер faster-whisper; опционален. В текущем Compose отключён. |
-| FRIDA helper | 9100 | Python HTTP-сервер оценки; опционален. В текущем Compose отключён. |
+| Whisper helper | 9000 | Python HTTP-сервер faster-whisper; опционален. В Compose работает контейнером `whisper`, наружу порт не публикуется. |
+| FRIDA helper | 9100 | Python HTTP-сервер оценки; опционален. В Compose работает контейнером `frida`, наружу порт не публикуется. |
 
 Gateway и диаризация больше не являются отдельно запускаемыми Maven-приложениями и не имеют собственных публичных API. Их код расположен внутри `stt-service`: контроллер браузера и оркестратор — в пакете `ru.sttplatform.gateway`, обработчик диаризации — в `ru.sttplatform.diarization`. STT напрямую управляет `DiarizationSession`; PCM и интервалы ролей не ходят через отдельный HTTP/WebSocket-процесс.
 

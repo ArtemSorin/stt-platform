@@ -7,6 +7,7 @@ services:
       STT_BIND_ADDRESS: 0.0.0.0
       ARCHIVE_CONTAINER_BINDING: "true"
       ANALYTICS_URL: http://analytics:8083
+      WHISPER_URL: http://whisper:9000
       INTERVIEW_EVENTS_TOKEN: ${INTERVIEW_EVENTS_TOKEN:?Set INTERVIEW_EVENTS_TOKEN}
       ARCHIVE_ENABLED: "true"
       ARCHIVE_QUEUE_DIR: /data/queue
@@ -22,8 +23,12 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
-      - analytics
-      - object-store
+      whisper:
+        condition: service_healthy
+      analytics:
+        condition: service_started
+      object-store:
+        condition: service_started
   postgres:
     image: postgres:17.6
     environment:
@@ -57,7 +62,8 @@ services:
       ARCHIVE_DATABASE_USER: interview
       ARCHIVE_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
       INTERVIEW_EVENTS_TOKEN: ${INTERVIEW_EVENTS_TOKEN:?Set INTERVIEW_EVENTS_TOKEN}
-      JUDGE_ENABLED: "false"
+      JUDGE_ENABLED: ${JUDGE_ENABLED:-true}
+      JUDGE_URL: http://frida:9100
       REPORTS_DIR: /data/reports
       ARCHIVE_ENABLED: "true"
       ARCHIVE_QUEUE_DIR: /data/reports/queue
@@ -74,8 +80,31 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      frida:
+        condition: service_healthy
+  whisper:
+    build:
+      context: .
+      dockerfile: stt-service/whisper/Dockerfile
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_CPU_THREADS: ${WHISPER_CPU_THREADS:-2}
+    volumes:
+      - whisper-models:/models
+  frida:
+    build:
+      context: .
+      dockerfile: analytics-service/judge/Dockerfile
+      args:
+        FRIDA_BACKEND: ${FRIDA_BACKEND:-onnx}
+    environment:
+      JUDGE_THREADS: ${JUDGE_THREADS:-}
+    volumes:
+      - frida-models:/models
 volumes:
   stt-data:
   postgres-data:
   object-data:
   report-data:
+  whisper-models:
+  frida-models:
