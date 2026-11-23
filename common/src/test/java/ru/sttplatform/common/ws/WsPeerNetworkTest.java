@@ -93,7 +93,9 @@ class WsPeerNetworkTest {
         WsPeer peer = connect(Map.of());
         server.awaitConnection(0, 3000).close();
         assertTrue(peer.awaitClosed(3));
-        assertEquals(1, closedCalls.get());
+
+        assertTrue(await(() -> closedCalls.get() == 1, 3000));
+
         assertFalse(peer.isOpen());
     }
 
