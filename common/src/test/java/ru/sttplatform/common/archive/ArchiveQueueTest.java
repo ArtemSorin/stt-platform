@@ -142,9 +142,11 @@ class ArchiveQueueTest {
             long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(20);
             while (stored.get() == null && System.nanoTime() < deadline) Thread.sleep(100);
             assertNotNull(stored.get());
+            assertTrue(queue.available(id, "audio_wav"));
             try (var stream = queue.open(id, "audio_wav")) { assertNotNull(stream); assertEquals("retention test", new String(stream.readAllBytes())); }
             assertThrows(IllegalArgumentException.class, () -> queue.delete(id, "replay_inputs_json"));
             queue.delete(id, "audio_wav");
+            assertFalse(queue.available(id, "audio_wav"));
             assertThrows(software.amazon.awssdk.services.s3.model.S3Exception.class, () -> queue.open(id, "audio_wav"));
         } finally { server.stop(0); }
     }

@@ -273,6 +273,20 @@ public final class ArchiveQueue implements AutoCloseable {
         return null;
     }
 
+    /** Проверяет доступность зарегистрированного объекта в хранилище.
+     * @param id UUID интервью
+     * @param kind тип файла
+     * @return true, если объект доступен */
+    public boolean available(UUID id, String kind) {
+        if (!kind.matches("[a-z][a-z0-9_-]{0,63}")) return false;
+        try {
+            s3.headObject(request -> request.bucket(bucket).key("interviews/" + id + "/" + kind));
+            return true;
+        } catch (software.amazon.awssdk.core.exception.SdkException error) {
+            return false;
+        }
+    }
+
     /** Удаляет объект с истёкшим сроком хранения.
      * @param id UUID интервью
      * @param kind тип файла */

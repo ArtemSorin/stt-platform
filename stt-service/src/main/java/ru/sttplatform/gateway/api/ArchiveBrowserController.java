@@ -39,19 +39,21 @@ public class ArchiveBrowserController {
     public ResponseEntity<ObjectNode> find(@PathVariable UUID id) throws IOException, InterruptedException {
         var interview = archive.find(id);
         if (interview == null) return ResponseEntity.notFound().build();
-        boolean audio = false, report = false;
+        String audioKind = null;
+        boolean report = false;
         var kinds = Json.MAPPER.createArrayNode();
         for (var artifact : interview.path("artifacts")) {
             String kind = artifact.path("kind").asText();
             if (TYPES.containsKey(kind)) kinds.add(kind);
-            audio |= kind.equals("audio_wav") || kind.equals("audio_mono_wav");
+            if (kind.equals("audio_wav") || kind.equals("audio_mono_wav")) audioKind = kind;
             report |= kind.equals("report_xlsx");
         }
         ObjectNode result = Json.MAPPER.createObjectNode();
         result.put("id", id.toString()); result.put("catalogVersion", interview.path("catalogVersion").asLong());
         result.put("callStatus", interview.path("callStatus").asText());
-        result.put("audioStatus", audio ? "saved" : archive.hasConflict(id, "audio_wav") || archive.hasConflict(id, "audio_mono_wav") ? "error" : "pending");
-        result.put("reportStatus", report ? "ready" : "pending");
+        result.put("audioStatus", audioKind != null ? archive.available(id, audioKind) ? "saved" : "unavailable"
+                : archive.hasConflict(id, "audio_wav") || archive.hasConflict(id, "audio_mono_wav") ? "error" : "pending");
+        result.put("reportStatus", report ? archive.available(id, "report_xlsx") ? "ready" : "unavailable" : "pending");
         result.set("artifacts", kinds);
         return ResponseEntity.ok(result);
     }

@@ -25,4 +25,9 @@ test('архив не обещает сохранность до подтвер�
   assert.equal(element('archive-report').textContent, 'готов');
   assert.equal(element('archive-audio-link').href, '/api/interviews/' + id + '/artifacts/audio_wav');
   assert.equal(element('archive-report-link').hidden, false);
+  state = {catalogVersion:1, callStatus:'finished', audioStatus:'unavailable', reportStatus:'unavailable', artifacts:['audio_wav','report_xlsx']};
+  await repeat();
+  assert.equal(element('archive-audio').textContent, 'хранилище недоступно');
+  assert.equal(element('archive-audio-link').hidden, true);
+  assert.equal(element('archive-report-link').hidden, true);
 });

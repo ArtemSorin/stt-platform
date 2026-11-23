@@ -13,8 +13,8 @@
       panel.hidden = false;
       document.getElementById('archive-version').textContent = data.catalogVersion;
       document.getElementById('archive-call').textContent = data.callStatus === 'finished' ? 'завершён' : 'идёт';
-      document.getElementById('archive-audio').textContent = data.audioStatus === 'saved' ? 'сохранена' : data.audioStatus === 'error' ? 'ошибка проверки записи' : 'ещё не сохранена';
-      document.getElementById('archive-report').textContent = data.reportStatus === 'ready' ? 'готов' : 'ещё не готов';
+      document.getElementById('archive-audio').textContent = data.audioStatus === 'saved' ? 'сохранена' : data.audioStatus === 'error' ? 'ошибка проверки записи' : data.audioStatus === 'unavailable' ? 'хранилище недоступно' : 'ещё не сохранена';
+      document.getElementById('archive-report').textContent = data.reportStatus === 'ready' ? 'готов' : data.reportStatus === 'unavailable' ? 'хранилище недоступно' : 'ещё не готов';
       const audio = document.getElementById('archive-audio-link');
       const audioKind = data.artifacts.includes('audio_wav') ? 'audio_wav' : 'audio_mono_wav';
       audio.hidden = data.audioStatus !== 'saved';
