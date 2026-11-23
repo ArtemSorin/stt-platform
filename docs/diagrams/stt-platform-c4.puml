@@ -12,13 +12,13 @@ Person(interviewer, "Интервьюер", "Проводит интервью �
 Container_Ext(browser, "Браузер", "HTML / JavaScript", "Захват эталона и PCM16; /test.html — тестовый режим без диаризации")
 
 System_Boundary(platform, "stt-platform · локальная машина") {
-    Container(stt, "STT + диаризация", "Spring Boot 3.3.5 · Java 17 · :8080", "Vosk и Nemotron/CAM++; браузерное API. В основном режиме обязательны эталон и диаризация.")
+    Container(stt, "STT + диаризация", "Docker Compose · Linux · Java 17 · :8080", "Vosk и Nemotron/CAM++; браузерное API. В основном режиме обязательны эталон и диаризация.")
     Container(analytics, "Аналитика", "Spring Boot 3.3.5 · Java 17 · :8083", "Вопросы, решения, оценка FRIDA и XLSX-отчёты.")
     Container(whisper, "Whisper helper · optional", "Python · :9000", "Уточнение ответов и итоговая транскрипция faster-whisper small.")
     Container(frida, "FRIDA helper · optional", "Python · :9100", "Семантическая оценка; локальная модель не проверялась.")
     ContainerDb(models, "Артефакты моделей", "Файлы вне Git", "Vosk, Nemotron, CAM++, Whisper и FRIDA (если установлена).")
     ContainerDb(reports, "Рабочая очередь отчётов", "Постоянный том Compose", "XLSX ожидает подтверждённой архивации в S3.")
-    ContainerDb(transcripts, "Рабочие файлы STT", "Постоянный диск Windows", "PCM и MD/ZIP сохраняются локально до архивации.")
+    ContainerDb(transcripts, "Рабочие файлы STT", "Постоянный том Compose", "PCM и MD/ZIP сохраняются до архивации.")
     ContainerDb(database, "Реестр интервью и банк", "PostgreSQL · Compose", "Неизменяемые версии банка, интервью и метаданные файлов.")
     ContainerDb(objects, "Архив", "S3 API · SeaweedFS в Compose", "Приватный WAV, XLSX, транскрипции и данные для повтора.")
 }
@@ -40,7 +40,7 @@ Rel_D(frida, models, "FRIDA, если установлена")
 
 note bottom of models
   Версии и подтверждённые снимки:
-  Vosk vosk-model-ru-0.42 (по умолчанию); vosk-model-small-ru-0.22 (альтернатива)
+  Vosk vosk-model-small-ru-0.22 (Compose); vosk-model-ru-0.42 (Windows)
   Nemotron-3-Diarization Q8_0 · ревизия f667ed73…
   CAM++ speech_campplus_sv_zh_en_16k-common_advanced · SHA-256 aa3cfc16…
   Whisper small · Systran/faster-whisper-small@536b0662…

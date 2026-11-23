@@ -21,6 +21,7 @@ public class ArchiveQueueConfig {
      * @param secret секрет
      * @param token внутренний токен
      * @param address адрес API браузера
+     * @param containerBinding разрешает привязку внутри контейнерной сети
      * @param gateway настройки аналитики
      * @return очередь архивации
      * @throws IOException ошибка каталога */
@@ -29,8 +30,9 @@ public class ArchiveQueueConfig {
             @Value("${archive.s3.endpoint}") String endpoint, @Value("${archive.s3.bucket}") String bucket,
             @Value("${archive.s3.access-key}") String access, @Value("${archive.s3.secret-key}") String secret,
             @Value("${INTERVIEW_EVENTS_TOKEN}") String token, @Value("${server.address}") String address,
+            @Value("${archive.container-binding:false}") boolean containerBinding,
             GatewayProperties gateway) throws IOException {
-        if (!"127.0.0.1".equals(address) && !"::1".equals(address) && !"localhost".equalsIgnoreCase(address))
+        if (!containerBinding && !"127.0.0.1".equals(address) && !"::1".equals(address) && !"localhost".equalsIgnoreCase(address))
             throw new IllegalStateException("Пилотный архив разрешает только локальный API браузера");
         return new ArchiveQueue(Path.of(queuePath), URI.create(endpoint), bucket, access, secret,
                 URI.create(gateway.analyticsUrl()), token);

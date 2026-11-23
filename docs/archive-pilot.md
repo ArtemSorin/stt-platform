@@ -4,39 +4,17 @@
 
 ## Первый запуск
 
-Нужны Docker Desktop с Linux-контейнерами, JDK 17, Maven, Windows-модели Vosk, Nemotron и CAM++. Пути и установка моделей описаны в [windows-setup.md](windows-setup.md). В PowerShell задайте для текущей сессии индивидуальные значения; не используйте примеры в эксплуатации и не добавляйте секреты в Git:
+Установите Docker Desktop с Linux-контейнерами и PowerShell 7. В корне проекта выполните:
 
 ```powershell
-$env:POSTGRES_PASSWORD = '<пароль PostgreSQL>'
-$env:S3_ACCESS_KEY = '<ключ S3>'
-$env:S3_SECRET_KEY = '<секрет S3>'
-$env:INTERVIEW_EVENTS_TOKEN = '<общий случайный секрет не короче 32 символов>'
-docker compose up -d --build
+pwsh -File ./scripts/start-pilot.ps1
 ```
 
-PostgreSQL не публикует порт на хост. S3 требует ключ и секрет; хранилище доступно только локально. Данные PostgreSQL, SeaweedFS и отложенные отчёты находятся в отдельных томах Docker. `docker compose down -v` удаляет эти данные и не является обычной остановкой стенда.
+Скрипт создаёт локальный `.env` со случайными секретами при первом запуске и поднимает четыре сервиса. Сохраните `.env` для повторного запуска. Первоначальная сборка загружает Linux runtime и модели. STT использует CPU, образ рассчитан на x86_64.
 
-В том же окне укажите готовые локальные пути к моделям и постоянному каталогу (он должен сохраняться после перезапуска Windows), затем запустите STT:
+Откройте http://127.0.0.1:8080/ и сохраните ссылку на интервью. PCM и очередь STT находятся в постоянном томе. PostgreSQL, SeaweedFS и очередь отчётов используют отдельные тома. Останавливайте стенд командой `docker compose down`. Команда с `-v` удаляет тома и данные.
 
-```powershell
-$env:VOSK_MODEL_PATH = 'C:\models\vosk-model-ru-0.42'
-$env:NEMOTRON_HOME = 'C:\models\nemotron'
-$env:GATEWAY_OUTPUT = 'C:\interview-archive\runs'
-$env:GATEWAY_AUDIO_SPOOL_DIR = 'C:\interview-archive\pcm'
-$env:ARCHIVE_ENABLED = 'true'
-$env:ARCHIVE_QUEUE_DIR = 'C:\interview-archive\queue'
-$env:ARCHIVE_S3_ENDPOINT = 'http://127.0.0.1:8333'
-$env:ARCHIVE_S3_BUCKET = 'interviews'
-$env:ARCHIVE_S3_ACCESS_KEY = $env:S3_ACCESS_KEY
-$env:ARCHIVE_S3_SECRET_KEY = $env:S3_SECRET_KEY
-mvn -pl stt-service -am package -DskipTests
-java -jar .\stt-service\target\stt-service-1.0.0.jar
-```
-
-Откройте `http://127.0.0.1:8080/`. Сохраните ссылку «Ссылка на интервью»: по ней показываются статусы и доступные файлы после рестарта. Для полной итоговой транскрипции запустите Whisper согласно [инструкции Windows](windows-setup.md); его отсутствие не препятствует архивированию исправной записи.
-
-Контрольный прогон с неперсональным моно WAV PCM16 16 кГц: `python scripts/smoke-archive.py путь\к\контрольной-записи.wav`. Скрипт записывает эталон, подаёт системный канал и тишину в микрофонный, ожидает архив и проверяет содержимое WAV и XLSX. Для диаризации требуется подготовленный Windows JDK из `windows-setup.md`.
-
+Контрольный прогон с неперсональным моно WAV PCM16 16 кГц — `python scripts/smoke-archive.py путь\к\контрольной-записи.wav`. Для проверки Vosk, Nemotron и CAM++ добавьте `--container <имя_контейнера_STT>` и используйте запись с разборчивой речью в первых восьми секундах. В этой конфигурации Whisper и FRIDA отключены. Вариант запуска STT на Windows описан в [инструкции Windows](windows-setup.md).
 ## Публикация банка
 
 В чистой базе при старте создаётся версия встроенного командного каталога. После проверки эталонов загрузите новую пару TSV:

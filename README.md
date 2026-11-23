@@ -11,11 +11,23 @@
 
 ## Архитектура
 
-Пилотный архив: PostgreSQL, SeaweedFS и аналитика работают в Compose, STT остаётся на Windows. Версия банка привязана к интервью; WAV и результаты отправляются через локальную очередь. [Запуск и ограничения архива](docs/archive-pilot.md).
+### Быстрый запуск на Windows
+
+Установите Git, Docker Desktop с Linux-контейнерами и PowerShell 7. В PowerShell выполните:
+
+```powershell
+git clone -b refactor/add-fisrt-containerization https://github.com/ArtemSorin/stt-platform.git
+cd stt-platform
+pwsh -File ./scripts/start-pilot.ps1
+```
+
+При первом запуске загружаются модели и создаётся локальный файл `.env` с секретами. Дождитесь сборки и откройте http://127.0.0.1:8080/. Остановка — `docker compose down`. Для повторного запуска сохраните `.env` и тома Compose. Команда `docker compose down -v` удаляет данные интервью. Whisper и FRIDA в этой конфигурации отключены.
+
+Пилотный архив: PostgreSQL, SeaweedFS, аналитика и STT работают в Compose. Версия банка привязана к интервью; WAV и результаты отправляются через постоянную очередь. [Запуск и ограничения архива](docs/archive-pilot.md).
 
 ```mermaid
 flowchart LR
-    Browser[Браузер на Windows] -->|PCM и команды| STT[STT на Windows]
+    Browser[Браузер на Windows] -->|PCM и команды| STT[STT в Compose на Linux]
     STT -->|события и реестр| Analytics[Аналитика в Compose]
     Analytics --> DB[(PostgreSQL: версии и реестр)]
     STT -->|аудио и журналы| S3[(Приватное S3)]
@@ -29,7 +41,7 @@ flowchart LR
 
 Диаграмма показывает оба запускаемых сервиса, библиотеку `common`, локальные помощники моделей и файлы моделей. [Исходник PlantUML](docs/diagrams/stt-platform-c4.puml) можно открыть и изменить на [plantuml.online](https://plantuml.online/); тот же PNG можно скачать отдельно для Miro: [C4-схема](docs/diagrams/stt-platform-c4.png). Точные идентификаторы и подтверждённые версии моделей приведены в [реестре моделей](docs/models.md).
 
-## Быстрый запуск Windows
+## Запуск из IntelliJ на Windows
 
 1. Установите JDK 17 и откройте корневой `pom.xml` как Maven-проект в IntelliJ IDEA.
 2. Скачайте модель Vosk: `powershell -ExecutionPolicy Bypass -File .\stt-service\download-model.ps1`. Если модель хранится отдельно, задайте `VOSK_MODEL_PATH`.

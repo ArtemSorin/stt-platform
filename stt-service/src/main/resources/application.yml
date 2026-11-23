@@ -26,7 +26,7 @@ whisper:
   startup-timeout-seconds: 600
 
 diarization:
-  nemo-lib: ${NEMOTRON_HOME:C:/Users/Public/NemotronTest}/runtime/bin/nemo_speech_asr_c.dll
+  nemo-lib: ${NEMOTRON_LIB:${NEMOTRON_HOME:C:/Users/Public/NemotronTest}/runtime/bin/nemo_speech_asr_c.dll}
   nemo-model: ${NEMOTRON_HOME:C:/Users/Public/NemotronTest}/model.gguf
   speaker-model: ${NEMOTRON_HOME:C:/Users/Public/NemotronTest}/speaker_embedding_model.onnx
   output-dir: ${DIARIZATION_OUTPUT:./runs/diarization}

@@ -1,4 +1,29 @@
 services:
+  stt-service:
+    build:
+      context: .
+      dockerfile: stt-service/Dockerfile
+    environment:
+      STT_BIND_ADDRESS: 0.0.0.0
+      ARCHIVE_CONTAINER_BINDING: "true"
+      ANALYTICS_URL: http://analytics:8083
+      INTERVIEW_EVENTS_TOKEN: ${INTERVIEW_EVENTS_TOKEN:?Set INTERVIEW_EVENTS_TOKEN}
+      ARCHIVE_ENABLED: "true"
+      ARCHIVE_QUEUE_DIR: /data/queue
+      ARCHIVE_S3_ENDPOINT: http://object-store:8333
+      ARCHIVE_S3_BUCKET: interviews
+      ARCHIVE_S3_ACCESS_KEY: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY}
+      ARCHIVE_S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY}
+      GATEWAY_OUTPUT: /data/runs
+      GATEWAY_AUDIO_SPOOL_DIR: /data/pcm
+      DIARIZATION_OUTPUT: /data/diarization
+    volumes:
+      - stt-data:/data
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      - analytics
+      - object-store
   postgres:
     image: postgres:17.6
     environment:
@@ -50,6 +75,7 @@ services:
       postgres:
         condition: service_healthy
 volumes:
+  stt-data:
   postgres-data:
   object-data:
   report-data:

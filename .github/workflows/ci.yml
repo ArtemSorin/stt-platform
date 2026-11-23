@@ -7,6 +7,22 @@ on:
     branches: [master]
 
 jobs:
+  linux-stt-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Linux STT with verified models
+        run: docker build -f stt-service/Dockerfile -t stt-linux:ci .
+      - name: Start STT and check HTTP readiness
+        run: |
+          docker run -d --name stt-ci -p 127.0.0.1:8080:8080 -e STT_BIND_ADDRESS=0.0.0.0 -e INTERVIEW_EVENTS_TOKEN=ci-test-token-0123456789abcdef0123456789 stt-linux:ci
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8080/api/status; then exit 0; fi
+            sleep 2
+          done
+          docker logs stt-ci
+          exit 1
+
   archive-integration:
     runs-on: ubuntu-latest
     services:

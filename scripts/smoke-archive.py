@@ -4,6 +4,7 @@ import argparse
 import json
 import io
 import struct
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -25,6 +26,7 @@ def request(path, body=None, headers=None):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("reference", help="неперсональный моно WAV PCM16 16 кГц с голосом кандидата")
+    parser.add_argument("--container", help="имя контейнера STT для проверки распознавания и диаризации")
     args = parser.parse_args()
     with wave.open(args.reference, "rb") as audio:
         if (audio.getnchannels(), audio.getsampwidth(), audio.getframerate()) != (1, 2, 16000):
@@ -47,14 +49,18 @@ def main():
         samples = struct.unpack("<" + "h" * (len(chunk) // 2), chunk)
         stereo = bytearray()
         for sample in samples:
-            stereo.extend(struct.pack("<hh", sample, 0))
+            stereo.extend(struct.pack("<hh", sample, ~sample))
         request("/api/audio/channels", bytes(stereo), {**headers, "X-Sequence": str(sequence)})
         time.sleep(0.64)
     request("/api/finish", b"", headers)
     deadline = time.monotonic() + 240
     while time.monotonic() < deadline:
         time.sleep(2)
-        state = request("/api/interviews/" + session)
+        try:
+            state = request("/api/interviews/" + session)
+        except (RuntimeError, urllib.error.URLError) as error:
+            print(f"Ожидание сервиса: {error}", flush=True)
+            continue
         print(json.dumps(state, ensure_ascii=False), flush=True)
         if state["audioStatus"] == "saved" and state["reportStatus"] == "ready":
             recording = request("/api/interviews/" + session + "/artifacts/audio_wav")
@@ -66,11 +72,26 @@ def main():
                 frames = archived.readframes(archived.getnframes())
                 values = struct.unpack("<" + "h" * (len(frames) // 2), frames)
                 actual_system = struct.pack("<" + "h" * (len(values) // 2), *values[::2])
-                if actual_system != speech or any(values[1::2]):
+                actual_microphone = struct.pack("<" + "h" * (len(values) // 2), *values[1::2])
+                samples_for_check = struct.unpack("<" + "h" * (len(speech) // 2), speech)
+                expected_microphone = struct.pack("<" + "h" * len(samples_for_check),
+                                                  *(~sample for sample in samples_for_check))
+                if actual_system != speech or actual_microphone != expected_microphone:
                     raise RuntimeError("Каналы WAV отличаются от отправленных")
             report = request("/api/interviews/" + session + "/artifacts/report_xlsx")
             if not report.startswith(b"PK"):
                 raise RuntimeError("Архив не вернул XLSX")
+            if args.container:
+                command = "cat /data/runs/*" + session[:8] + "*/stt-events.jsonl"
+                output = subprocess.check_output(["docker", "exec", args.container, "sh", "-c", command], text=True, encoding="utf-8")
+                events = [json.loads(line) for line in output.splitlines()]
+                if not any(event.get("text", "").strip() for event in events):
+                    raise RuntimeError("Vosk не распознал речь")
+                command = "cat /data/diarization/*" + session[:8] + "*/segments.json"
+                segments = json.loads(subprocess.check_output(
+                    ["docker", "exec", args.container, "sh", "-c", command], text=True, encoding="utf-8"))
+                if not any(segment.get("label") == "Кандидат" for segment in segments):
+                    raise RuntimeError("Нет подтверждённого сегмента кандидата")
             print("OK: session=" + session + ", WAV и XLSX доступны")
             return
     raise RuntimeError("Истекло ожидание архива: " + session)
