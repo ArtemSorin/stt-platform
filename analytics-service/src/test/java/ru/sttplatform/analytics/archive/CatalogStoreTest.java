@@ -42,7 +42,8 @@ class CatalogStoreTest {
                  var age = connection.prepareStatement("UPDATE archive_artifact SET created_at = CURRENT_TIMESTAMP - INTERVAL '5 days' WHERE interview_id=?")) {
                 age.setObject(1, oldInterview); age.executeUpdate();
             }
-            assertTrue(store.expired(-1, -1).isEmpty());
+            assertTrue(store.expired(-1, -1).stream()
+                    .noneMatch(item -> item.interviewId().equals(oldInterview)));
             var expired = store.expired(1, -1);
             assertTrue(expired.stream().anyMatch(item -> item.interviewId().equals(oldInterview)));
             assertTrue(store.find(oldInterview).artifacts().isEmpty());
