@@ -7,6 +7,18 @@ on:
     branches: [master]
 
 jobs:
+  startup-script-syntax:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check portable shell syntax
+        run: sh -n scripts/start-pilot.sh
+      - name: Check first and repeated startup
+        run: sh scripts/test-start-pilot.sh
+
   finalization-worker-image:
     runs-on: ubuntu-latest
     steps:

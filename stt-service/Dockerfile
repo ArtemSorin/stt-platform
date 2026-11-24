@@ -23,14 +23,14 @@ RUN --mount=type=cache,target=/root/.m2 mvn -B -pl stt-service -am package -Dski
 
 FROM eclipse-temurin:17-jre AS runtime
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl unzip ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends curl unzip ca-certificates libarchive-tools \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/stt
 
 RUN curl -fL --http1.1 --retry 5 --retry-delay 3 --connect-timeout 15 -o /tmp/nemo.tar.gz https://github.com/NVIDIA/NeMo-Speech.cpp/releases/download/v0.3.0/nemo-speech-0.3.0-linux-x86_64-cpu.tar.gz \
  && echo '255f12b722ab15b2a38a51cf125d56e3fa97058b528f7e895b39d6a473deb06e  /tmp/nemo.tar.gz' | sha256sum -c - \
- && mkdir /opt/nemo && tar xzf /tmp/nemo.tar.gz -C /opt/nemo --strip-components=1 && rm /tmp/nemo.tar.gz
+ && mkdir /opt/nemo && bsdtar -xzf /tmp/nemo.tar.gz -C /opt/nemo --strip-components=1 && rm /tmp/nemo.tar.gz
 
 RUN mkdir -p /opt/models \
  && curl -fL --http1.1 --retry 5 --retry-delay 3 --connect-timeout 15 -o /tmp/vosk.zip 'https://huggingface.co/rhasspy/vosk-models/resolve/e7ac2109d134b5f2404ba95389b2fb51916d4cab/ru/vosk-model-small-ru-0.22.zip' \

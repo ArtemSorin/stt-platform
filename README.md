@@ -12,7 +12,19 @@
 
 ## Архитектура
 
-### Быстрый запуск на Windows
+### Быстрый запуск
+
+Для macOS и Linux установите Docker с Compose, Git, curl и OpenSSL, затем выполните в терминале:
+
+```sh
+git clone -b refactor/add-fisrt-containerization https://github.com/ArtemSorin/stt-platform.git
+cd stt-platform
+sh ./scripts/start-pilot.sh
+```
+
+Образ STT использует Linux amd64. На Apple Silicon Docker запускает его через эмуляцию; производительность и захват системного звука зависят от окружения. Первый запуск загружает модели и может занять продолжительное время. После запуска откройте http://127.0.0.1:8080/.
+
+Для Windows:
 
 Установите Git, Docker Desktop с Linux-контейнерами и PowerShell 7. В PowerShell выполните:
 
