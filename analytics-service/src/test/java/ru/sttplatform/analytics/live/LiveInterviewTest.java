@@ -12,6 +12,49 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Весь конвейер без Vosk: распознаватель подменён сценарием, звук синтетический. */
 class LiveInterviewTest {
 
+    @Test
+    void snapshotIsPersistedBeforeFinalizationAcknowledgement() throws Exception {
+        Run run = new Run("", 0, List.of(Level.INTERN));
+        run.live.setDeferredFinalReport(true);
+        run.live.start();
+        var saved = new java.util.concurrent.atomic.AtomicReference<LiveInterview.FinalizationSnapshot>();
+        run.live.setSnapshotWriter(snapshot -> {
+            assertNull(run.last("finalization_ready"));
+            saved.set(snapshot);
+        });
+        run.live.onPrepareFinal();
+        assertNotNull(saved.get());
+        assertNotNull(run.last("finalization_ready"));
+
+        Run restored = new Run("", 0, List.of(Level.INTERN));
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var persisted = mapper.readValue(mapper.writeValueAsString(saved.get()),
+                LiveInterview.FinalizationSnapshot.class);
+        restored.live.restoreFinalizationSnapshot(persisted);
+        assertEquals(saved.get(), restored.live.saveFinalizationSnapshot());
+    }
+
+    @Test
+    void failedSnapshotIsNotAcknowledged() {
+        Run run = new Run("", 0, List.of(Level.INTERN));
+        run.live.setDeferredFinalReport(true);
+        run.live.start();
+        run.live.setSnapshotWriter(snapshot -> { throw new IllegalStateException("database unavailable"); });
+        assertThrows(IllegalStateException.class, run.live::onPrepareFinal);
+        assertNull(run.last("finalization_ready"));
+    }
+
+    @Test
+    void reportsExplicitVoskFallbackAsTheFinalTranscriptSource() {
+        Run run = new Run("", 0, List.of(Level.INTERN));
+        run.live.setDeferredFinalReport(true);
+        run.live.start();
+        run.live.onPrepareFinal();
+        run.live.onFinalSource("vosk_fallback");
+        run.live.onStop();
+        assertEquals("vosk_fallback", run.last("report").get("transcriptSource"));
+    }
+
     /**
      * «Распознаёт» заданный текст так же, как Vosk: слова появляются по мере ГОЛОСОВЫХ кадров, в тишине ничего не меняется;
      * finish() отдаёт распознанное с прошлого finish() (граница фразы), а дальше распознавание идёт с чистого листа.

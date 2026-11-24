@@ -1,11 +1,12 @@
 # stt-platform
 
-Платформа локального интервью: один сервис принимает аудио, распознаёт речь и определяет роли; второй ведёт интервью, оценивает ответы и сохраняет отчёт. Запускаются два Spring Boot сервиса; `common` — общая библиотека, а Python-процессы Whisper и FRIDA — необязательные помощники моделей.
+Платформа локального интервью: STT принимает аудио и определяет роли, аналитика ведёт интервью и оценивает ответы, а фоновый обработчик завершает отчёт. В Compose запускаются семь контейнеров; `common` — общая библиотека.
 
 | Компонент | Адрес | Назначение |
 |---|---:|---|
 | STT и диаризация | `http://127.0.0.1:8080` | Один live Vosk системного канала, Nemotron/CAM++, браузерное API и страницы интервью. |
 | Аналитика | `http://127.0.0.1:8083` | Вопросы, предварительные подсказки, решения, оценки и XLSX. |
+| Фоновая финализация | внутренняя сеть Compose | Постоянные задания, итоговый Whisper, передача ответов аналитике и публикация файлов. |
 | Whisper helper (опционально) | `http://127.0.0.1:9000` | Итоговое распознавание обоих каналов после интервью. |
 | FRIDA helper (опционально) | `http://127.0.0.1:9100` | Семантическая оценка ответов; при недоступности применяются правила. |
 
@@ -23,7 +24,7 @@ pwsh -File ./scripts/start-pilot.ps1
 
 При первом запуске загружаются модели и создаётся локальный файл `.env` с секретами. Дождитесь сборки и откройте http://127.0.0.1:8080/. Остановка — `docker compose down`. Для повторного запуска сохраните `.env` и тома Compose. Команда `docker compose down -v` удаляет данные интервью. Whisper и FRIDA запускаются отдельными контейнерами; при первом старте они скачивают модели в тома `whisper-models` и `frida-models`, поэтому запуск занимает заметно дольше. Модель Whisper задаётся `WHISPER_MODEL` (по умолчанию `small`), FRIDA на CPU использует int8 ONNX (`FRIDA_BACKEND=torch` включает PyTorch), оценку можно выключить `JUDGE_ENABLED=false`.
 
-Пилотный архив: PostgreSQL, SeaweedFS, аналитика, STT, Whisper и FRIDA работают в Compose. Версия банка привязана к интервью; WAV и результаты отправляются через постоянную очередь. [Запуск и ограничения архива](docs/archive-pilot.md).
+Пилотный архив: PostgreSQL, SeaweedFS, аналитика, STT, Whisper, FRIDA и обработчик работают в Compose. Версия банка привязана к интервью; WAV и результаты отправляются через постоянную очередь. После подтверждения задания вкладку можно закрыть; прежняя ссылка отдаёт запись, транскрипцию и готовый XLSX. [Запуск и ограничения архива](docs/archive-pilot.md).
 
 ```mermaid
 flowchart LR
@@ -33,13 +34,16 @@ flowchart LR
     STT -->|аудио и журналы| S3[(Приватное S3)]
     Analytics -->|XLSX| S3
     STT --> Disk[(Рабочий диск и очередь)]
-    STT --> Whisper[Whisper: опционально]
+    STT -->|снимок и запрос финализации| Analytics
+    Worker[Фоновый обработчик] -->|задания и ответы| Analytics
+    Worker -->|читает и публикует файлы| S3
+    Worker -->|распознавание| Whisper[Whisper]
     Analytics --> FRIDA[FRIDA: опционально]
 ```
 
 ![C4 Container: stt-platform](docs/diagrams/stt-platform-c4.png)
 
-Диаграмма показывает оба запускаемых сервиса, библиотеку `common`, локальные помощники моделей и файлы моделей. [Исходник PlantUML](docs/diagrams/stt-platform-c4.puml) можно открыть и изменить на [plantuml.online](https://plantuml.online/); тот же PNG можно скачать отдельно для Miro: [C4-схема](docs/diagrams/stt-platform-c4.png). Точные идентификаторы и подтверждённые версии моделей приведены в [реестре моделей](docs/models.md).
+Диаграмма показывает контейнеры и их связи. [Исходник PlantUML](docs/diagrams/stt-platform-c4.puml) можно открыть и изменить на [plantuml.online](https://plantuml.online/); тот же PNG можно скачать отдельно для Miro: [C4-схема](docs/diagrams/stt-platform-c4.png). Точные идентификаторы и подтверждённые версии моделей приведены в [реестре моделей](docs/models.md).
 
 ## Запуск из IntelliJ на Windows
 
@@ -78,13 +82,17 @@ Whisper и FRIDA можно включить отдельно. Пошагова�
 ```powershell
 mvn test
 mvn package
-mvn -pl stt-service,analytics-service -am package javadoc:javadoc
+mvn -pl stt-service,analytics-service,finalization-worker -am package javadoc:javadoc
 node --test stt-service/src/test/js/*.test.cjs
 python -m unittest discover -s stt-service/whisper -p 'test_*.py' -v
 python -m unittest discover -s analytics-service/judge -p 'test_*.py' -v
 ```
 
 Проверка контрактов: `npx --yes @redocly/cli@1.34.2 lint docs/api/stt.openapi.yaml docs/api/analytics.openapi.yaml docs/api/whisper-helper.openapi.yaml docs/api/frida-helper.openapi.yaml`.
+
+Для отдельного контейнерного теста восстановления требуются Docker и `boto3`: `python -m pip install boto3==1.40.67`, затем `python scripts/test-finalization-worker.py --image finalization-worker:ci`. Скрипт запускает изолированные тестовые контейнеры и проверяет восстановление после перезапуска, отказ S3, повтор публикации и контрольные суммы.
+
+Для проверки реальных STT/Whisper на неперсональной WAV-записи используйте `python scripts/smoke-finalization.py <путь-к-записи.wav>` (PCM16 mono 16 кГц). Сценарий проверяет готовность транскрипции и XLSX по прежнему ID. Полная двухканальная ручная приёмка описана в [инструкции](specs/004-background-finalization/quickstart.md).
 
 ## Карта документации
 

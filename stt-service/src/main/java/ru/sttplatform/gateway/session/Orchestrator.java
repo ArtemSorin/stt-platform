@@ -47,26 +47,41 @@ import java.util.function.Consumer;
 public final class Orchestrator implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(Orchestrator.class);
     private ArchiveQueue archiveQueue;
+    private boolean backgroundFinalization;
+    private volatile boolean finalizationQueued;
 
     /** Настраивает постоянную очередь архива.
      * @param queue очередь или null, если архив отключён */
     public void setArchiveQueue(ArchiveQueue queue) { this.archiveQueue = queue; }
 
+    /** Включает передачу закрытого интервью в постоянную очередь обработчика.
+     * @param enabled используется ли фоновая финализация */
+    public void setBackgroundFinalization(boolean enabled) { this.backgroundFinalization = enabled; }
+
+    /** @return сохранён ли пакет в локальной очереди доставки */
+    public boolean finalizationQueued() { return finalizationQueued; }
+
     /** Ставит закрытые журналы и данные распознавания в очередь для последующего повтора. */
     public void archiveReplayInputs() {
         if (archiveQueue == null) return;
         try {
-            UUID id = UUID.fromString(sessionId);
-            Path input = directory.resolve("archive-inputs.json");
-            Json.MAPPER.writeValue(input.toFile(), Json.map("sessionId", sessionId, "channels", separateChannels ? 2 : 1,
-                    "sampleRate", RATE, "samples", capturedSamples, "testMode", testMode,
-                    "words", finalWords, "roles", finalDiarizationSpans));
-            archiveQueue.submit(id, "replay_inputs_json", input);
-            for (String name : List.of("interview-events", "stt-events", "timeline-events")) {
-                Path journalPath = directory.resolve(name + ".jsonl");
-                if (Files.isRegularFile(journalPath)) archiveQueue.submit(id, name.replace('-', '_') + "_jsonl", journalPath);
-            }
+            queueReplayInputs(false);
         } catch (Exception error) { log.error("Не удалось подготовить данные повтора для архива", error); }
+    }
+
+    private void queueReplayInputs(boolean requireJournal) throws java.io.IOException {
+        if (archiveQueue == null) throw new java.io.IOException("Очередь архива не настроена");
+        UUID id = UUID.fromString(sessionId);
+        Path input = directory.resolve("archive-inputs.json");
+        Json.MAPPER.writeValue(input.toFile(), Json.map("schemaVersion", 1, "sessionId", sessionId, "channels", separateChannels ? 2 : 1,
+                "sampleRate", RATE, "samples", capturedSamples, "testMode", testMode,
+                "words", finalWords, "roles", finalDiarizationSpans, "voskAnswerText", voskAnswerText));
+        archiveQueue.submit(id, "replay_inputs_json", input);
+        for (String name : List.of("interview-events", "stt-events", "timeline-events")) {
+            Path journalPath = directory.resolve(name + ".jsonl");
+            if (Files.isRegularFile(journalPath)) archiveQueue.submit(id, name.replace('-', '_') + "_jsonl", journalPath);
+            else if (requireJournal && name.equals("interview-events")) throw new java.io.IOException("Журнал интервью отсутствует");
+        }
     }
 
     /** Разрешает удалить локальный PCM и WAV после подтверждения архивации. */
@@ -1497,6 +1512,14 @@ public final class Orchestrator implements AutoCloseable {
             interviewJournal.close();
             List<FinalAnswerAssembler.Interval> intervals = new InterviewJournalReplay().read(
                     directory.resolve("interview-events.jsonl"), sessionId, capturedSamples);
+            if (backgroundFinalization) {
+                if (audioSpool == null || transcriptError != null)
+                    throw new java.io.IOException("Полная запись недоступна: " + transcriptError);
+                queueReplayInputs(true);
+                archiveQueue.enqueueFinalization(UUID.fromString(sessionId));
+                finalizationQueued = true;
+                return;
+            }
             if (audioSpool != null) {
                 try {
                     // Даже при потере канала дописываем накопленные данные для диагностики.

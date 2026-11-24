@@ -10,6 +10,7 @@ services:
       WHISPER_URL: http://whisper:9000
       INTERVIEW_EVENTS_TOKEN: ${INTERVIEW_EVENTS_TOKEN:?Set INTERVIEW_EVENTS_TOKEN}
       ARCHIVE_ENABLED: "true"
+      FINALIZATION_WORKER_ENABLED: "true"
       ARCHIVE_QUEUE_DIR: /data/queue
       ARCHIVE_S3_ENDPOINT: http://object-store:8333
       ARCHIVE_S3_BUCKET: interviews
@@ -66,6 +67,7 @@ services:
       JUDGE_URL: http://frida:9100
       REPORTS_DIR: /data/reports
       ARCHIVE_ENABLED: "true"
+      FINALIZATION_WORKER_ENABLED: "true"
       ARCHIVE_QUEUE_DIR: /data/reports/queue
       ARCHIVE_S3_ENDPOINT: http://object-store:8333
       ARCHIVE_S3_BUCKET: interviews
@@ -91,6 +93,30 @@ services:
       WHISPER_CPU_THREADS: ${WHISPER_CPU_THREADS:-2}
     volumes:
       - whisper-models:/models
+  finalization-worker:
+    build:
+      context: .
+      dockerfile: finalization-worker/Dockerfile
+    environment:
+      WORKER_ANALYTICS_URL: http://analytics:8083
+      INTERVIEW_EVENTS_TOKEN: ${INTERVIEW_EVENTS_TOKEN:?Set INTERVIEW_EVENTS_TOKEN}
+      ARCHIVE_S3_ENDPOINT: http://object-store:8333
+      ARCHIVE_S3_BUCKET: interviews
+      ARCHIVE_S3_ACCESS_KEY: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY}
+      ARCHIVE_S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY}
+      WHISPER_URL: http://whisper:9000
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/8090'"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    depends_on:
+      analytics:
+        condition: service_started
+      object-store:
+        condition: service_started
+      whisper:
+        condition: service_healthy
   frida:
     build:
       context: .

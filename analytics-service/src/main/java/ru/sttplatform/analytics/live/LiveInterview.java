@@ -136,6 +136,7 @@ public final class LiveInterview {
     private volatile boolean finalScoringIncomplete;
     private boolean finalTranscriptIncomplete;
     private boolean finalReferencesMissing;
+    private java.util.function.Consumer<FinalizationSnapshot> snapshotWriter;
     private final Set<Integer> finalAnswerIds = ConcurrentHashMap.newKeySet();
     private boolean finished;
 
@@ -207,6 +208,49 @@ public final class LiveInterview {
     /** Откладывает построение отчёта до команды окончания итоговой обработки.
      * @param enabled включить отложенный отчёт */
     public void setDeferredFinalReport(boolean enabled) { this.deferredFinalReport = enabled; }
+
+    /** Снимок аналитики, достаточный для восстановления принятых ответов.
+     * @param state состояние вопросов и попыток
+     * @param answerRefs соответствие ID ответов попыткам
+     * @param candidate имя кандидата
+     * @param startedAt начало интервью в формате ISO-8601
+     * @param settings настройки отчёта */
+    public record FinalizationSnapshot(InterviewSession.SavedState state,
+                                       Map<Integer, InterviewSession.SavedAttemptRef> answerRefs,
+                                       String candidate, String startedAt, Map<String, String> settings) {}
+
+    /** Подключает сохранение снимка перед подтверждением финализации.
+     * @param writer запись снимка в постоянное хранилище */
+    public void setSnapshotWriter(java.util.function.Consumer<FinalizationSnapshot> writer) {
+        this.snapshotWriter = writer;
+    }
+
+    /** Возвращает снимок живого этапа с устойчивыми ссылками на ответы.
+     * @return сериализуемое состояние интервью */
+    public FinalizationSnapshot saveFinalizationSnapshot() {
+        Map<Integer, InterviewSession.SavedAttemptRef> refs = new LinkedHashMap<>();
+        answerRefs.forEach((id, ref) -> refs.put(id, interview.saveAttemptRef(ref)));
+        return new FinalizationSnapshot(interview.saveState(), Map.copyOf(refs), candidate,
+                startedAt.toString(), Map.copyOf(settings));
+    }
+
+    /** Восстанавливает готовое к финальной оценке интервью.
+     * @param snapshot ранее сохранённое состояние */
+    public void restoreFinalizationSnapshot(FinalizationSnapshot snapshot) {
+        if (snapshot == null || snapshot.state() == null || snapshot.answerRefs() == null
+                || snapshot.candidate() == null || snapshot.startedAt() == null || snapshot.settings() == null)
+            throw new IllegalArgumentException("Некорректный снимок интервью");
+        interview.restoreState(snapshot.state());
+        answerRefs.clear();
+        snapshot.answerRefs().forEach((id, ref) -> answerRefs.put(id, interview.restoreAttemptRef(ref)));
+        candidate = snapshot.candidate();
+        startedAt = java.time.Instant.parse(snapshot.startedAt());
+        settings = Map.copyOf(snapshot.settings());
+        deferredFinalReport = true;
+        finalizationPrepared = true;
+        finished = true;
+        phase = Phase.IDLE;
+    }
 
     /** Настраивает место сохранения отчёта и сведения о кандидате.
      * @param exporter средство экспорта отчёта
@@ -469,15 +513,16 @@ public final class LiveInterview {
     }
 
     /** Фиксирует источник финализации даже если в интервью нет ответов.
-     * @param source whisper или vosk
+     * @param source whisper, vosk, mixed или vosk_fallback
      * @throws IllegalStateException если финализация не готова
      * @throws IllegalArgumentException при неизвестном источнике */
     public void onFinalSource(String source) {
         if (!deferredFinalReport || !finalizationPrepared || finalReportRequested)
             throw new IllegalStateException("Источник итогового текста сейчас не принимается");
-        if (!"whisper".equals(source) && !"vosk".equals(source) && !"mixed".equals(source))
+        if (!"whisper".equals(source) && !"vosk".equals(source) && !"mixed".equals(source)
+                && !"vosk_fallback".equals(source))
             throw new IllegalArgumentException("Неизвестный источник итогового текста");
-        if ("vosk".equals(source)) finalUsesVosk = true;
+        if ("vosk".equals(source) || "vosk_fallback".equals(source)) finalUsesVosk = true;
         if ("mixed".equals(source)) finalUsesMixed = true;
     }
 
@@ -494,6 +539,7 @@ public final class LiveInterview {
         }
         finished = true;
         phase = Phase.IDLE;
+        if (snapshotWriter != null) snapshotWriter.accept(saveFinalizationSnapshot());
         finalizationPrepared = true;
         out.send(Map.of("type", "finalization_ready"));
     }

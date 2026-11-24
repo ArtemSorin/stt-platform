@@ -72,6 +72,16 @@ public final class InterviewWebSocketHandler extends AbstractWebSocketHandler {
     private final Map<String, Active> active = new ConcurrentHashMap<>();
     private CatalogStore catalogStore;
     private ArchiveQueue archiveQueue;
+    private ru.sttplatform.analytics.archive.FinalizationJobStore finalizationJobs;
+    @org.springframework.beans.factory.annotation.Value("${finalization.worker-enabled:false}")
+    private boolean finalizationWorkerEnabled;
+
+    /** Подключает постоянное хранилище фоновой финализации.
+     * @param jobs хранилище заданий */
+    @Autowired(required = false)
+    public void setFinalizationJobs(ru.sttplatform.analytics.archive.FinalizationJobStore jobs) {
+        this.finalizationJobs = jobs;
+    }
 
     /** Подключает постоянный реестр, если он настроен.
      * @param catalogStore хранилище версий банка
@@ -217,6 +227,24 @@ public final class InterviewWebSocketHandler extends AbstractWebSocketHandler {
                 });
         live.setJudge(judgeProps.enabled() ? judge : null, judgeProps.decisionDeadlineMs());
         live.setDeferredFinalReport(data.path("deferredFinalReport").asBoolean(false));
+        if (finalizationWorkerEnabled) {
+            if (finalizationJobs == null || catalogStore == null)
+                throw new IllegalStateException("Для фоновой финализации требуется реестр PostgreSQL");
+            if (!data.path("deferredFinalReport").asBoolean(false))
+                throw new IllegalArgumentException("Фоновая финализация требует отложенного отчёта");
+            List<String> selectedLevels = levels.stream().map(Enum::name).toList();
+            live.setSnapshotWriter(snapshot -> {
+                try {
+                    var registered = catalogStore.find(UUID.fromString(sessionId));
+                    if (registered == null) throw new IllegalStateException("Интервью отсутствует в реестре");
+                    finalizationJobs.saveSnapshot(UUID.fromString(sessionId),
+                            mapper.writeValueAsString(Map.of("schemaVersion", 1, "interviewId", sessionId,
+                                    "catalogVersion", registered.catalogVersion(), "levels", selectedLevels, "snapshot", snapshot)));
+                } catch (Exception error) {
+                    throw new IllegalStateException("Не удалось сохранить снимок интервью", error);
+                }
+            });
+        }
         live.setTiming(new LiveInterview.Timing(properties.nextExtraMs(), properties.otherNextExtraMs(),
                 properties.followUpExtraMs(), properties.graceMs()));
         boolean whisperOn = data.path("whisperEnabled").asBoolean(false);

@@ -49,6 +49,30 @@ public final class InterviewAudioSpool implements AutoCloseable {
         writer.start();
     }
 
+    private InterviewAudioSpool(Path existing, boolean stereo, long samples) throws IOException {
+        if (samples < 0 || !Files.isRegularFile(existing)
+                || Files.size(existing) != Math.multiplyExact(samples, stereo ? 4L : 2L))
+            throw new IOException("Неверный размер исходной PCM-записи");
+        this.path = existing;
+        this.stereo = stereo;
+        this.outputFactory = Files::newOutputStream;
+        this.queue = new ArrayBlockingQueue<>(1);
+        this.writer = null;
+        this.acceptedSamples = samples;
+        this.writtenSamples = samples;
+        this.sealed = true;
+    }
+
+    /** Открывает проверенную PCM-запись для чтения после перезапуска процесса.
+     * @param path путь к PCM16
+     * @param stereo два синхронных канала
+     * @param samples число сэмплов каждого канала
+     * @return доступная только для чтения запись
+     * @throws IOException если размер записи не совпадает */
+    public static InterviewAudioSpool openExisting(Path path, boolean stereo, long samples) throws IOException {
+        return new InterviewAudioSpool(path, stereo, samples);
+    }
+
     /** Ставит последовательный кадр в ограниченную очередь.
      * @param firstSample позиция первого сэмпла каждого канала
      * @param system моно PCM16 системного канала или тестового микрофона
@@ -157,6 +181,6 @@ public final class InterviewAudioSpool implements AutoCloseable {
     public void delete() throws IOException { Files.deleteIfExists(path); }
 
     @Override public void close() {
-        if (writer.isAlive()) { writer.interrupt(); try { writer.join(2_000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } }
+        if (writer != null && writer.isAlive()) { writer.interrupt(); try { writer.join(2_000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } }
     }
 }

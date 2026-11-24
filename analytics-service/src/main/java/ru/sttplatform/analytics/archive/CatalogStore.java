@@ -191,7 +191,8 @@ public final class CatalogStore {
      * @param callStatus состояние звонка
      * @param artifacts зарегистрированные файлы
      */
-    public record Interview(UUID id, long catalogVersion, String callStatus, List<Artifact> artifacts) {}
+    public record Interview(UUID id, long catalogVersion, String callStatus, List<Artifact> artifacts,
+                            String finalizationStatus) {}
 
     /** Загружает карточку интервью.
      * @param id идентификатор интервью
@@ -199,7 +200,14 @@ public final class CatalogStore {
      * @throws SQLException при ошибке реестра
      */
     public Interview find(UUID id) throws SQLException {
-        try (Connection connection = connect(); var statement = connection.prepareStatement("SELECT catalog_version_id,call_status FROM archive_interview WHERE id=?")) {
+        try (Connection connection = connect(); var statement = connection.prepareStatement("""
+                SELECT interview.catalog_version_id, interview.call_status,
+                       CASE WHEN snapshot.interview_id IS NULL THEN NULL ELSE COALESCE(job.state, 'waiting_inputs') END
+                FROM archive_interview interview
+                LEFT JOIN finalization_snapshot snapshot ON snapshot.interview_id = interview.id
+                LEFT JOIN finalization_job job ON job.interview_id = interview.id
+                WHERE interview.id = ?
+                """)) {
             statement.setObject(1, id);
             try (var rows = statement.executeQuery()) {
                 if (!rows.next()) return null;
@@ -211,7 +219,7 @@ public final class CatalogStore {
                         while (fileRows.next()) files.add(new Artifact(fileRows.getString(1), fileRows.getString(2), fileRows.getLong(3), fileRows.getString(4)));
                     }
                 }
-                return new Interview(id, version, status, List.copyOf(files));
+                return new Interview(id, version, status, List.copyOf(files), rows.getString(3));
             }
         }
     }
@@ -242,7 +250,19 @@ public final class CatalogStore {
         try (Connection connection = connect()) {
             connection.setAutoCommit(false);
             try {
-                try (var update = connection.prepareStatement("UPDATE archive_artifact SET deleting=TRUE WHERE NOT deleting AND ((kind IN ('audio_wav','audio_mono_wav') AND ? > 0 AND created_at < CURRENT_TIMESTAMP - (? * INTERVAL '1 day')) OR (kind='report_xlsx' AND ? > 0 AND created_at < CURRENT_TIMESTAMP - (? * INTERVAL '1 day')))")) {
+                try (var update = connection.prepareStatement("""
+                        UPDATE archive_artifact artifact SET deleting=TRUE
+                        WHERE NOT artifact.deleting
+                          AND ((artifact.kind IN ('audio_wav','audio_mono_wav') AND ? > 0
+                                  AND artifact.created_at < CURRENT_TIMESTAMP - (? * INTERVAL '1 day'))
+                            OR (artifact.kind='report_xlsx' AND ? > 0
+                                  AND artifact.created_at < CURRENT_TIMESTAMP - (? * INTERVAL '1 day')))
+                          AND NOT EXISTS (
+                              SELECT 1 FROM finalization_snapshot snapshot
+                              LEFT JOIN finalization_job job ON job.interview_id = snapshot.interview_id
+                              WHERE snapshot.interview_id = artifact.interview_id
+                                AND (job.state IS NULL OR job.state IN ('pending','running','retry_wait')))
+                        """)) {
                     update.setInt(1, audioDays); update.setInt(2, audioDays); update.setInt(3, reportDays); update.setInt(4, reportDays); update.executeUpdate();
                 }
                 List<ExpiredArtifact> results = new ArrayList<>();

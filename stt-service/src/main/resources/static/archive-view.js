@@ -14,7 +14,7 @@
       document.getElementById('archive-version').textContent = data.catalogVersion;
       document.getElementById('archive-call').textContent = data.callStatus === 'finished' ? 'завершён' : 'идёт';
       document.getElementById('archive-audio').textContent = data.audioStatus === 'saved' ? 'сохранена' : data.audioStatus === 'error' ? 'ошибка проверки записи' : data.audioStatus === 'unavailable' ? 'хранилище недоступно' : 'ещё не сохранена';
-      document.getElementById('archive-report').textContent = data.reportStatus === 'ready' ? 'готов' : data.reportStatus === 'unavailable' ? 'хранилище недоступно' : 'ещё не готов';
+      document.getElementById('archive-report').textContent = data.reportStatus === 'ready' ? 'готов' : data.reportStatus === 'unavailable' ? 'хранилище недоступно' : data.reportStatus === 'processing' ? 'задание принято, отчёт обрабатывается' : data.reportStatus === 'error' ? 'ошибка обработки' : data.finalizationStatus === 'pending' || data.finalizationStatus === 'retry_wait' ? 'задание принято, ожидает обработки' : data.finalizationStatus === 'waiting_inputs' ? 'ожидается сохранение материалов' : 'ожидает обработки';
       const audio = document.getElementById('archive-audio-link');
       const audioKind = data.artifacts.includes('audio_wav') ? 'audio_wav' : 'audio_mono_wav';
       audio.hidden = data.audioStatus !== 'saved';
@@ -22,6 +22,9 @@
       const report = document.getElementById('archive-report-link');
       report.hidden = data.reportStatus !== 'ready';
       report.href = '/api/interviews/' + encodeURIComponent(session) + '/artifacts/report_xlsx';
+      const transcript = document.getElementById('archive-transcript-link');
+      transcript.hidden = data.reportStatus !== 'ready' || !data.artifacts.includes('transcripts_zip');
+      transcript.href = '/api/interviews/' + encodeURIComponent(session) + '/artifacts/transcripts_zip';
       document.getElementById('archive-link').href = location.pathname + '?session=' + encodeURIComponent(session);
     } catch (_) {
       if (!panel.hidden) document.getElementById('archive-audio').textContent = 'статус недоступен';

@@ -5,14 +5,17 @@ COPY pom.xml ./
 COPY common/pom.xml common/pom.xml
 COPY analytics-service/pom.xml analytics-service/pom.xml
 COPY stt-service/pom.xml stt-service/pom.xml
+COPY finalization-worker/pom.xml finalization-worker/pom.xml
+
+RUN --mount=type=cache,target=/root/.m2 cached=/root/.m2/repository/com/github/k2-fsa/sherpa-onnx/sherpa-onnx-native-lib-linux-x64/v1.13.8/sherpa-onnx-native-lib-linux-x64-v1.13.8.jar \
+ && if test -f "$cached" && echo "30c93b59381113f9c20aedbbf9fc1ad399158f6bc03dddc0f8934a6e28e069ba  $cached" | sha256sum -c -; then :; else \
+    curl -fL --http1.1 --retry 3 --retry-delay 3 -o /tmp/sherpa-linux.jar https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-native-lib-linux-x64-1.13.8.jar \
+    && echo '30c93b59381113f9c20aedbbf9fc1ad399158f6bc03dddc0f8934a6e28e069ba  /tmp/sherpa-linux.jar' | sha256sum -c - \
+    && mvn -B install:install-file -Dfile=/tmp/sherpa-linux.jar -DgroupId=com.github.k2-fsa.sherpa-onnx -DartifactId=sherpa-onnx-native-lib-linux-x64 -Dversion=v1.13.8 -Dpackaging=jar; fi
 
 COPY common/src common/src
 COPY analytics-service/src analytics-service/src
 COPY stt-service/src stt-service/src
-
-RUN --mount=type=cache,target=/root/.m2 curl -fL --http1.1 --retry 3 --retry-delay 3 -o /tmp/sherpa-linux.jar https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-native-lib-linux-x64-1.13.8.jar \
- && echo '30c93b59381113f9c20aedbbf9fc1ad399158f6bc03dddc0f8934a6e28e069ba  /tmp/sherpa-linux.jar' | sha256sum -c - \
- && mvn -B install:install-file -Dfile=/tmp/sherpa-linux.jar -DgroupId=com.github.k2-fsa.sherpa-onnx -DartifactId=sherpa-onnx-native-lib-linux-x64 -Dversion=v1.13.8 -Dpackaging=jar
 
 # Сборка проекта
 RUN --mount=type=cache,target=/root/.m2 mvn -B -pl stt-service -am package -DskipTests

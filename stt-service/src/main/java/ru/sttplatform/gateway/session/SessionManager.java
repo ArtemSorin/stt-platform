@@ -65,6 +65,8 @@ public class SessionManager {
     private final IntegrationProperties integrationProps;
     private volatile Active current;
     private ArchiveQueue archiveQueue;
+    @Value("${finalization.worker-enabled:false}")
+    private boolean backgroundFinalization;
 
     /** Подключает очередь для пилотного архива.
      * @param queue постоянная очередь файлов */
@@ -139,6 +141,7 @@ public class SessionManager {
                     props.sttUrl(), props.analyticsUrl(), test.id, whisperEnabled && whisperClient.configured(),
                     integrationProps, whisperClient, true, candidate, false, Path.of(props.audioSpoolDir()), deferredFinalReport);
             test.orchestrator.setArchiveQueue(archiveQueue);
+            test.orchestrator.setBackgroundFinalization(backgroundFinalization);
             test.phase = "live";
             current = test;
             return status(test.id);
@@ -206,6 +209,7 @@ public class SessionManager {
                     props.sttUrl(), props.analyticsUrl(), a.id, whisperClient.configured(), integrationProps,
                     whisperClient, false, "", "channels".equals(audioMode), Path.of(props.audioSpoolDir()), deferredFinalReport);
             a.orchestrator.setArchiveQueue(archiveQueue);
+            a.orchestrator.setBackgroundFinalization(backgroundFinalization);
             a.audioMode = audioMode;
             session.setListener(event -> onDiarizationEvent(a, Json.MAPPER.valueToTree(event)));
         } catch (RuntimeException | java.io.IOException failure) {
@@ -494,9 +498,9 @@ public class SessionManager {
             a.failure = "Не удалось завершить тестовое интервью: " + error;
             log.error("Завершение тестового интервью", error);
         } finally {
-            publishTranscript(a);
+            if (!a.orchestrator.finalizationQueued()) publishTranscript(a);
             a.orchestrator.close();
-            a.orchestrator.archiveReplayInputs();
+            if (!a.orchestrator.finalizationQueued()) a.orchestrator.archiveReplayInputs();
             a.orchestrator.releaseArchivedAudio();
             a.done = true;
             a.finalizing = false;

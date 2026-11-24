@@ -36,4 +36,22 @@ class ArchiveWaveTest {
         assertFalse(Files.exists(target));
         assertEquals(4, Files.size(source));
     }
+
+    @Test
+    void restoresBothChannelsForPostprocessingAndRejectsCorruption() throws Exception {
+        byte[] pcm = {1, 0, 2, 0, 3, 0, 4, 0};
+        Path source = directory.resolve("source.pcm"), wave = directory.resolve("audio.wav");
+        Path restored = directory.resolve("restored.pcm");
+        Files.write(source, pcm);
+        ArchiveWave.write(source, wave, 2, 2);
+        ArchiveWave.extract(wave, restored, 2, 2);
+        try (var spool = InterviewAudioSpool.openExisting(restored, true, 2)) {
+            assertArrayEquals(new byte[]{1, 0, 3, 0}, spool.read(0, 0, 2));
+            assertArrayEquals(new byte[]{2, 0, 4, 0}, spool.read(1, 0, 2));
+            spool.seal(2);
+        }
+        assertThrows(java.io.IOException.class, () -> InterviewAudioSpool.openExisting(restored, true, 3));
+        assertThrows(java.io.IOException.class, () -> ArchiveWave.extract(wave, directory.resolve("bad.pcm"), 1, 4));
+        assertFalse(Files.exists(directory.resolve("bad.pcm")));
+    }
 }

@@ -29,7 +29,7 @@ class QuestionCatalogTest {
         assertThrows(IllegalArgumentException.class, () -> QuestionCatalog.parse(QUESTIONS + QUESTIONS, FOLLOWUPS));
     }
     @Test void example_files_load_into_live_knowledge_and_preserve_followup_data() throws Exception {
-        var root = java.nio.file.Path.of("demo");
+        var root = demoDirectory();
         var entries = QuestionCatalog.parse(java.nio.file.Files.readString(root.resolve("catalog-questions.tsv")),
                 java.nio.file.Files.readString(root.resolve("catalog-followups.tsv")));
         var knowledge = InterviewKnowledge.build(QuestionCatalog.toQuestions(entries), Glossary.parse(""));
@@ -83,7 +83,7 @@ class QuestionCatalogTest {
     }
 
     @Test void full_migration_draft_cannot_be_loaded_without_followup_references() throws Exception {
-        var root = java.nio.file.Path.of("demo");
+        var root = demoDirectory();
         String questions = java.nio.file.Files.readString(root.resolve("catalog-full-draft-questions.tsv"));
         String followups = java.nio.file.Files.readString(root.resolve("catalog-full-draft-followups.tsv"));
         assertEquals(50, QuestionCatalog.parse(questions, "").size());
@@ -99,6 +99,12 @@ class QuestionCatalogTest {
         String followups = "\uFEFF# followUpId\tquestionId\tquestion\treference\tnotes\n" + FOLLOWUPS;
         var result = QuestionCatalog.parse(questions, followups);
         assertEquals("Q1-F2", result.get(0).followUps().get(0).id());
+    }
+
+    private static java.nio.file.Path demoDirectory() {
+        var moduleDirectory = java.nio.file.Path.of("demo");
+        return java.nio.file.Files.isDirectory(moduleDirectory) ? moduleDirectory
+                : java.nio.file.Path.of("analytics-service", "demo");
     }
 
 }

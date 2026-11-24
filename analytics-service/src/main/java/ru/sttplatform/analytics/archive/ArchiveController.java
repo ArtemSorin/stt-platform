@@ -19,6 +19,12 @@ import java.util.UUID;
 public class ArchiveController {
     private final CatalogStore store;
     private final byte[] token;
+    private FinalizationJobStore finalizationJobs;
+
+    /** Подключает очередь финализации.
+     * @param jobs хранилище заданий */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setFinalizationJobs(FinalizationJobStore jobs) { this.finalizationJobs = jobs; }
 
     /** @param store реестр
      * @param token внутренний секрет */
@@ -60,6 +66,18 @@ public class ArchiveController {
     @PutMapping("/interviews/{id}/finish")
     public void finish(@RequestHeader("X-Internal-Token") String token, @PathVariable UUID id) throws SQLException {
         authenticate(token); store.finish(id);
+    }
+
+    /** Ставит завершённое интервью в очередь после регистрации всех входов.
+     * @param token внутренний секрет
+     * @param id идентификатор интервью
+     * @throws SQLException ошибка базы */
+    @PutMapping("/interviews/{id}/finalization")
+    public void enqueueFinalization(@RequestHeader("X-Internal-Token") String token, @PathVariable UUID id)
+            throws SQLException {
+        authenticate(token);
+        if (finalizationJobs == null || !finalizationJobs.enqueueRegistered(id))
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Ожидается регистрация исходных файлов");
     }
 
     /** @param token секрет

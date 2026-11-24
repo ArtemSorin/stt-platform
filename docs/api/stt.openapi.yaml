@@ -39,7 +39,8 @@ paths:
                   catalogVersion: {type: integer}
                   callStatus: {type: string, enum: [active, finished]}
                   audioStatus: {type: string, enum: [pending, saved, error, unavailable]}
-                  reportStatus: {type: string, enum: [pending, ready, unavailable]}
+                  reportStatus: {type: string, enum: [pending, processing, ready, error, unavailable]}
+                  finalizationStatus: {type: string, enum: [waiting_inputs, pending, running, retry_wait, ready, failed], description: Отсутствует у старых интервью без задания.}
                   artifacts: {type: array, items: {type: string}}
         '404': {description: Интервью не зарегистрировано или архив отключён}
         '500': {description: Реестр недоступен}

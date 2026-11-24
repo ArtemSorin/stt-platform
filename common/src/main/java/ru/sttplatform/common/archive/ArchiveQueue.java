@@ -144,8 +144,9 @@ public final class ArchiveQueue implements AutoCloseable {
         UUID id = UUID.fromString(metadata.path("interviewId").asText());
         String kind = metadata.path("kind").asText();
         if (!kind.matches("[a-z][a-z0-9_-]{0,63}")) throw new IOException("Некорректный тип в задании");
-        if (kind.equals("call_finished")) {
-            var request = HttpRequest.newBuilder(registry.resolve("/internal/archive/interviews/" + id + "/finish"))
+        if (kind.equals("call_finished") || kind.equals("finalization_enqueue")) {
+            String action = kind.equals("call_finished") ? "finish" : "finalization";
+            var request = HttpRequest.newBuilder(registry.resolve("/internal/archive/interviews/" + id + "/" + action))
                     .timeout(Duration.ofSeconds(15)).header("X-Internal-Token", token)
                     .PUT(HttpRequest.BodyPublishers.noBody()).build();
             var response = http.send(request, HttpResponse.BodyHandlers.discarding());
@@ -215,6 +216,16 @@ public final class ArchiveQueue implements AutoCloseable {
     public void finish(UUID id) throws IOException {
         Path marker = Files.createTempFile(root, ".finish-", ".tmp");
         try { submit(id, "call_finished", marker); }
+        finally { Files.deleteIfExists(marker); }
+    }
+
+    /** Ставит долговечное задание регистрации фоновой финализации.
+     * Реестр принимает его после доставки всех обязательных файлов.
+     * @param id идентификатор интервью
+     * @throws IOException ошибка очереди */
+    public void enqueueFinalization(UUID id) throws IOException {
+        Path marker = Files.createTempFile(root, ".finalization-", ".tmp");
+        try { submit(id, "finalization_enqueue", marker); }
         finally { Files.deleteIfExists(marker); }
     }
 

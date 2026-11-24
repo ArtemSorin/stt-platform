@@ -4,6 +4,7 @@ COPY pom.xml ./
 COPY common/pom.xml common/pom.xml
 COPY analytics-service/pom.xml analytics-service/pom.xml
 COPY stt-service/pom.xml stt-service/pom.xml
+COPY finalization-worker/pom.xml finalization-worker/pom.xml
 COPY common/src common/src
 COPY analytics-service/src analytics-service/src
 RUN --mount=type=cache,target=/root/.m2 mvn -B -pl analytics-service -am package -DskipTests

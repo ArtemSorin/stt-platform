@@ -53,7 +53,15 @@ public class ArchiveBrowserController {
         result.put("callStatus", interview.path("callStatus").asText());
         result.put("audioStatus", audioKind != null ? archive.available(id, audioKind) ? "saved" : "unavailable"
                 : archive.hasConflict(id, "audio_wav") || archive.hasConflict(id, "audio_mono_wav") ? "error" : "pending");
-        result.put("reportStatus", report ? archive.available(id, "report_xlsx") ? "ready" : "unavailable" : "pending");
+        String finalization = interview.path("finalizationStatus").asText("");
+        if (!finalization.isEmpty()) result.put("finalizationStatus", finalization);
+        boolean complete = finalization.isEmpty() || finalization.equals("ready");
+        String reportStatus = !complete ? switch (finalization) {
+            case "running" -> "processing";
+            case "failed" -> "error";
+            default -> "pending";
+        } : report ? archive.available(id, "report_xlsx") ? "ready" : "unavailable" : "pending";
+        result.put("reportStatus", reportStatus);
         result.set("artifacts", kinds);
         return ResponseEntity.ok(result);
     }
@@ -66,6 +74,12 @@ public class ArchiveBrowserController {
     @GetMapping("/{id}/artifacts/{kind}")
     public ResponseEntity<StreamingResponseBody> download(@PathVariable UUID id, @PathVariable String kind) throws IOException, InterruptedException {
         if (!TYPES.containsKey(kind)) return ResponseEntity.notFound().build();
+        if (java.util.Set.of("report_xlsx", "transcript_md", "transcript_timed_md", "transcripts_zip").contains(kind)) {
+            var interview = archive.find(id);
+            if (interview == null) return ResponseEntity.notFound().build();
+            String state = interview.path("finalizationStatus").asText("");
+            if (!state.isEmpty() && !state.equals("ready")) return ResponseEntity.notFound().build();
+        }
         InputStream stream = archive.open(id, kind);
         if (stream == null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok().contentType(MediaType.parseMediaType(TYPES.get(kind)))
