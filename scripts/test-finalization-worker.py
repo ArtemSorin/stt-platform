@@ -302,6 +302,7 @@ def main() -> None:
     suffix = uuid.uuid4().hex[:8]
     s3_name = "finalization-s3-" + suffix
     worker_name = "finalization-worker-" + suffix
+    network_name = "finalization-test-" + suffix
     s3_port, analytics_port, whisper_port = free_port(), free_port(), free_port()
     token = TOKEN
     state = State()
@@ -315,14 +316,19 @@ def main() -> None:
     for server in (analytics_server, whisper_server):
         threading.Thread(target=server.serve_forever, daemon=True).start()
 
-    s3_process = subprocess.run([
-        "docker", "run", "-d", "--name", s3_name,
-        "-p", f"127.0.0.1:{s3_port}:8333",
-        "-e", f"AWS_ACCESS_KEY_ID={ACCESS_KEY}", "-e", f"AWS_SECRET_ACCESS_KEY={SECRET_KEY}",
-        "chrislusf/seaweedfs:4.05", "mini", "-dir=/data",
-    ], check=True, capture_output=True, text=True)
     worker_started = False
+    network_created = False
     try:
+        subprocess.run(["docker", "network", "create", network_name],
+                       check=True, capture_output=True, text=True)
+        network_created = True
+        subprocess.run([
+            "docker", "run", "-d", "--name", s3_name,
+            "--network", network_name, "--network-alias", "finalization-s3",
+            "-p", f"127.0.0.1:{s3_port}:8333",
+            "-e", f"AWS_ACCESS_KEY_ID={ACCESS_KEY}", "-e", f"AWS_SECRET_ACCESS_KEY={SECRET_KEY}",
+            "chrislusf/seaweedfs:4.05", "mini", "-dir=/data",
+        ], check=True, capture_output=True, text=True)
         s3 = boto3.client("s3", endpoint_url=f"http://127.0.0.1:{s3_port}",
                           aws_access_key_id=ACCESS_KEY, aws_secret_access_key=SECRET_KEY,
                           region_name="us-east-1", config=Config(s3={"addressing_style": "path"}))
@@ -330,11 +336,11 @@ def main() -> None:
         with tempfile.TemporaryDirectory(prefix="finalization-worker-test-") as directory:
             fixture(state, s3, directory)
             subprocess.run([
-                "docker", "run", "-d", "--name", worker_name,
+                "docker", "run", "-d", "--name", worker_name, "--network", network_name,
                 "--add-host", "host.docker.internal:host-gateway",
                 "-e", f"WORKER_ANALYTICS_URL=http://host.docker.internal:{analytics_port}",
                 "-e", f"INTERVIEW_EVENTS_TOKEN={token}",
-                "-e", f"ARCHIVE_S3_ENDPOINT=http://host.docker.internal:{s3_port}",
+                "-e", "ARCHIVE_S3_ENDPOINT=http://finalization-s3:8333",
                 "-e", f"ARCHIVE_S3_BUCKET={BUCKET}", "-e", f"ARCHIVE_S3_ACCESS_KEY={ACCESS_KEY}",
                 "-e", f"ARCHIVE_S3_SECRET_KEY={SECRET_KEY}",
                 "-e", f"WHISPER_URL=http://host.docker.internal:{whisper_port}", args.image,
@@ -342,7 +348,10 @@ def main() -> None:
             worker_started = True
 
             if not whisper_entered.wait(60):
-                raise TimeoutError("Обработчик не дошёл до итогового Whisper")
+                logs = subprocess.run(["docker", "logs", worker_name], capture_output=True, text=True).stdout
+                with state.lock:
+                    observed = f"state={state.job_state}, попытка={state.attempt}, ошибок={state.failure_count}"
+                raise TimeoutError("Обработчик не дошёл до итогового Whisper (" + observed + "). Логи:\n" + logs[-8000:])
             subprocess.run(["docker", "kill", worker_name], check=True, capture_output=True)
             state.requeue_after_worker_kill()
             subprocess.run(["docker", "start", worker_name], check=True, capture_output=True)
@@ -393,6 +402,8 @@ def main() -> None:
         if worker_started:
             subprocess.run(["docker", "rm", "-f", worker_name], capture_output=True)
         subprocess.run(["docker", "rm", "-f", s3_name], capture_output=True)
+        if network_created:
+            subprocess.run(["docker", "network", "rm", network_name], capture_output=True)
         analytics_server.shutdown()
         whisper_server.shutdown()
 
