@@ -54,7 +54,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-pilot.ps1
 
 Логи: `docker compose logs -f`; остановка: `docker compose down`. Сохраните `.env` и тома для следующего запуска. `docker compose down -v` удаляет данные интервью. Whisper и FRIDA при первом запуске загружают модели в постоянные тома. `WHISPER_MODEL` по умолчанию `small`; FRIDA использует int8 ONNX на CPU (`FRIDA_BACKEND=torch` включает PyTorch), оценку можно выключить через `JUDGE_ENABLED=false`.
 
-Проверьте архитектуру STT командой `docker compose exec stt-service uname -m`: на Apple Silicon ожидается `aarch64`, на Intel/AMD — `x86_64`. Если лог содержит `Очередь аудио переполнена`, live-диаризация не успела обработать поток; сначала проверьте архитектуру контейнера и `docker compose logs -f stt-service`. Простое увеличение очереди откладывает остановку, но не ускоряет inference.
+Проверьте архитектуру STT командой `docker compose exec stt-service uname -m`: на Apple Silicon ожидается `aarch64`, на Intel/AMD — `x86_64`. При перегрузке live-диаризации новый запуск отключит только определение ролей и продолжит запись обоих каналов и итоговую обработку; роли в отчёте могут быть неполными. Проверьте `docker compose logs -f stt-service` и `summary.json` в `/data/diarization`. Увеличение очереди не ускоряет inference.
 
 #### Обновление уже клонированного проекта
 

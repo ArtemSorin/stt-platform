@@ -134,11 +134,12 @@ function renderTranscript(integration) {
 function render(status) {
   const phase = status.phase || 'idle', integration = status.integration || {};
   $('phase').textContent = ({idle:'Ожидание', enrolling:'Запись эталона · звук компьютера', preparing:'Создаём эталон',
-    retry:'Повторите эталон', live:'Интервью · анализ идёт', stopping:'Завершаем анализ',
+    retry:'Повторите эталон', live:'Интервью · анализ идёт',
+    degraded:'Интервью · live-диаризация остановлена', stopping:'Завершаем анализ',
     finished:'Интервью завершено', error:'Ошибка обработки'})[phase] || phase;
-  $('light').classList.toggle('active', phase === 'enrolling' || phase === 'live');
-  $('role').textContent = phase === 'live' || phase === 'stopping'
-    ? integration.current_role || status.role || 'Ожидаем речь' : '—';
+  $('light').classList.toggle('active', phase === 'enrolling' || phase === 'live' || phase === 'degraded');
+  $('role').textContent = phase === 'degraded' ? 'Live-роли временно недоступны'
+    : phase === 'live' || phase === 'stopping' ? integration.current_role || status.role || 'Ожидаем речь' : '—';
   $('audio-time').textContent = `${(status.audio_seconds || 0).toFixed(1).replace('.', ',')} с`;
   $('queue').textContent = `${status.queue_depth_chunks || 0} кадров`;
   if (status.output_dir) $('output').textContent = status.output_dir;
@@ -181,8 +182,9 @@ function render(status) {
     }
     const ttsOn = $('tts-enabled').checked && 'speechSynthesis' in window;
     $('asked').hidden = ttsOn && !ttsManualRequired;
-    $('asked').disabled = phase !== 'live' || questionBlocked || questionReady || ttsInProgress;
-    $('skip').disabled = phase !== 'live' || questionBlocked || ttsInProgress;
+    const interviewActive = phase === 'live' || phase === 'degraded';
+    $('asked').disabled = !interviewActive || questionBlocked || questionReady || ttsInProgress;
+    $('skip').disabled = !interviewActive || questionBlocked || ttsInProgress;
     if (integration.question_pending) {
       // Переход подтверждается по обработанному аудио, а не по настенным часам браузера.
       clearTimeout(questionTimer);
@@ -248,9 +250,11 @@ function render(status) {
 
   if (phase === 'retry') {
     enroll.disabled = false; enroll.textContent = 'Повторить запись голоса'; finish.disabled = true;
-  } else if (phase === 'live') {
+  } else if (phase === 'live' || phase === 'degraded') {
     enroll.disabled = true; finish.disabled = false;
-    $('hint').textContent = 'Эталон записан из звука компьютера; для live-анализа используется системный звук, оба канала записываются для итоговой транскрипции.';
+    $('hint').textContent = phase === 'degraded'
+      ? 'Live-диаризация перегружена. Запись обоих каналов продолжается; live-роли и текущая оценка могут быть неполными.'
+      : 'Эталон записан из звука компьютера; для live-анализа используется системный звук, оба канала записываются для итоговой транскрипции.';
   } else if (phase === 'finished' || phase === 'error') {
     enroll.disabled = false; enroll.textContent = 'Новое интервью'; finish.disabled = true;
   }

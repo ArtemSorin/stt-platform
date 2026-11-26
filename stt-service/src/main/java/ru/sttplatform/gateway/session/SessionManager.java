@@ -276,7 +276,7 @@ public class SessionManager {
     }
 
     private void acceptLive(Active a, long sequence, byte[] pcm, byte[] microphone, String audioMode, boolean candidateEnabled) {
-        if (a.orchestrator == null || (!a.testMode && a.diarization == null) || !"live".equals(a.phase) || a.finalizing)
+        if (a.orchestrator == null || (!a.testMode && a.diarization == null) || !receivingAudio(a.phase) || a.finalizing)
             throw new ApiException(409, "Анализ аудио сейчас недоступен.");
         if (!a.audioMode.equals(audioMode))
             throw new ApiException(409, "Формат аудио нельзя менять во время интервью.");
@@ -593,9 +593,13 @@ public class SessionManager {
 
     private Orchestrator liveOrchestrator(String token) {
         Active a = require(token);
-        if (a.orchestrator == null || !"live".equals(a.phase) || a.finalizing)
+        if (a.orchestrator == null || !receivingAudio(a.phase) || a.finalizing)
             throw new ApiException(409, "Интервью ещё не началось.");
         return a.orchestrator;
+    }
+
+    private static boolean receivingAudio(String phase) {
+        return "live".equals(phase) || "degraded".equals(phase);
     }
 
     private Active require(String token) {

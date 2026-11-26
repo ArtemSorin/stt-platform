@@ -40,7 +40,7 @@
           ? `Обрабатываем запись: ${progress.done} из ${progress.total} каналов.`
           : 'Готовим полную транскрипцию после интервью.';
       }
-      else if (phase === 'live' || phase === 'enrolling' || phase === 'preparing') {
+      else if (phase === 'live' || phase === 'degraded' || phase === 'enrolling' || phase === 'preparing') {
         ++requestNumber; loadedKey = ''; panel.hidden = true; actions.hidden = true;
       }
     }

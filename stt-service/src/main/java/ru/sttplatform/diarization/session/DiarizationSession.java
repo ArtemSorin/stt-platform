@@ -20,7 +20,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
@@ -44,17 +43,17 @@ public final class DiarizationSession {
     private final NemotronStream diarizer;
     private final long startupAt = System.nanoTime();
     private final ByteArrayOutputStream reference = new ByteArrayOutputStream();
-    private final ArrayBlockingQueue<AudioChunk> queue;
+    private final DiarizationAudioQueue queue;
     private final Path outputDir;
     private volatile Consumer<Map<String, Object>> listener;
     private volatile String phase = "enrolling", role = "Ожидаем речь", error;
     private volatile double audioSeconds;
     private volatile long lastContact = System.nanoTime();
-    private long enrollmentSequence, liveSequence, acceptedSamples, droppedSamples, droppedChunks, overflowCount, maxDepth;
+    private long enrollmentSequence, liveSequence;
     private String stopReason = "running";
     private LiveSession session;
     private Thread worker;
-    private boolean stopRequested, resourcesClosed;
+    private boolean stopRequested, resourcesClosed, workerFinished, degraded;
 
     /**
      * Загружает модели Nemotron и CAM++ (один раз на сессию) и создаёт каталог результатов.
@@ -64,7 +63,7 @@ public final class DiarizationSession {
      */
     public DiarizationSession(DiarizationProperties props) throws Exception {
         this.props = props;
-        this.queue = new ArrayBlockingQueue<>(props.queueChunks());
+        this.queue = new DiarizationAudioQueue(props.queueChunks());
         Path root = DiarizationProperties.path(props.outputDir(), "output-dir");
         outputDir = root.resolve(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
                 + "-" + id.substring(0, 8));
@@ -134,15 +133,16 @@ public final class DiarizationSession {
      */
     public synchronized Map<String, Object> status(String token) {
         if (id.equals(token)) lastContact = System.nanoTime();
-        boolean done = phase.equals("finished") || phase.equals("error");
+        boolean done = phase.equals("finished") || phase.equals("error") || workerFinished;
+        DiarizationAudioQueue.Snapshot capture = queue.snapshot();
         return Json.map("session_id", id, "phase", phase, "role", role,
                 "audio_seconds", Json.round(audioSeconds, 3),
                 "enrollment_seconds", Json.round(reference.size() / (2.0 * Pcm.RATE), 3),
-                "queue_depth_chunks", queue.size(), "error", error,
+                "queue_depth_chunks", queue.size(), "error", error, "degraded", degraded,
                 "output_dir", done ? outputDir.toString() : null,
-                "capture", Json.map("capacity_chunks", props.queueChunks(), "max_depth_chunks", maxDepth,
-                        "overflow_count", overflowCount, "dropped_chunks", droppedChunks,
-                        "dropped_audio_seconds", Json.round(droppedSamples / (double) Pcm.RATE, 3),
+                "capture", Json.map("capacity_chunks", queue.capacity(), "max_depth_chunks", capture.maxDepth(),
+                        "overflow_count", capture.overflowCount(), "dropped_chunks", capture.droppedChunks(),
+                        "dropped_audio_seconds", Json.round(capture.droppedSamples() / (double) Pcm.RATE, 3),
                         "stop_reason", stopReason));
     }
 
@@ -225,25 +225,25 @@ public final class DiarizationSession {
      */
     public synchronized void liveAudio(byte[] bytes) {
         validate(bytes);
-        if (!phase.equals("live")) throw new SessionException(409, "Анализ аудио сейчас недоступен.");
+        if (!phase.equals("live") && !phase.equals("degraded"))
+            throw new SessionException(409, "Анализ аудио сейчас недоступен.");
         float[] chunk = Pcm.toFloats(bytes);
-        AudioChunk item = new AudioChunk(liveSequence, acceptedSamples, chunk, System.nanoTime());
+        AudioChunk item = new AudioChunk(liveSequence, queue.acceptedSamples(), chunk, System.nanoTime());
         liveSequence++;
         lastContact = System.nanoTime();
-        // Пропуск кадра нарушил бы временную шкалу одной сессии Nemotron — поэтому при переполнении сессия останавливается.
-        if (!queue.offer(item)) {
-            overflowCount++;
-            droppedChunks++;
-            droppedSamples += chunk.length;
-            error = "Очередь аудио переполнена; интервью остановлено. Результаты сохранены.";
-            stopReason = "queue_overflow";
-            stopRequested = true;
-            phase = "stopping";
-            notifyAll();
-            throw new SessionException(409, error);
+        DiarizationAudioQueue.Admission admission = queue.offer(item);
+        if (admission != DiarizationAudioQueue.Admission.ACCEPTED) {
+            if (admission == DiarizationAudioQueue.Admission.OVERFLOW) {
+                error = "Очередь live-диаризации переполнена. Определение ролей остановлено; запись каналов продолжается, итоговые роли могут быть неполными.";
+                degraded = true;
+                phase = "degraded";
+                stopReason = "queue_overflow";
+                stopRequested = true;
+                notifyAll();
+            }
+            // Пропущенные кадры не подходят для Nemotron, но продолжают поступать в запись и STT.
+            return;
         }
-        acceptedSamples += chunk.length;
-        maxDepth = Math.max(maxDepth, queue.size());
     }
 
     /**
@@ -252,7 +252,7 @@ public final class DiarizationSession {
      * @param reason requested | system_audio_lost | microphone_lost | capture_error | client_disconnected | …
      */
     public synchronized void requestStop(String reason) {
-        if (phase.equals("live")) phase = "stopping";
+        if (phase.equals("live") || phase.equals("degraded")) phase = "stopping";
         if (phase.equals("enrolling") || phase.equals("retry")) {
             phase = "finished";
             dispose();
@@ -265,6 +265,7 @@ public final class DiarizationSession {
             stopRequested = true;
             stopReason = reason;
         }
+        if (workerFinished && degraded) phase = "error";
         notifyAll();
     }
 
@@ -272,7 +273,7 @@ public final class DiarizationSession {
     public synchronized void watchdog() {
         if (terminal()) return;
         if ((System.nanoTime() - lastContact) / 1e9 < 15) return;
-        if (phase.equals("live")) {
+        if (phase.equals("live") || phase.equals("degraded")) {
             error = "Вкладка или микрофон перестали передавать звук; интервью остановлено.";
             requestStop("client_disconnected");
         } else if (phase.equals("enrolling") || phase.equals("retry")) {
@@ -301,8 +302,10 @@ public final class DiarizationSession {
     }
 
     private synchronized LiveSession.Capture metrics() {
-        return new LiveSession.Capture(acceptedSamples + droppedSamples, props.queueChunks(), maxDepth,
-                overflowCount, droppedChunks, droppedSamples, stopReason, error);
+        DiarizationAudioQueue.Snapshot capture = queue.snapshot();
+        return new LiveSession.Capture(capture.acceptedSamples() + capture.droppedSamples(), queue.capacity(),
+                capture.maxDepth(), capture.overflowCount(), capture.droppedChunks(), capture.droppedSamples(),
+                stopReason, error);
     }
 
     private void emit(Map<String, Object> event) {
@@ -340,14 +343,20 @@ public final class DiarizationSession {
                     break;
                 }
             }
-            session.finish(metrics(), overflowCount == 0 && error == null);
+            session.finish(metrics(), !degraded && error == null);
             synchronized (this) {
-                phase = error == null ? "finished" : "error";
+                workerFinished = true;
+                if (phase.equals("stopping")) phase = error == null ? "finished" : "error";
+                else if (degraded) phase = "degraded";
+                else phase = error == null ? "finished" : "error";
             }
             log.info("Файлы результата: {}", outputDir);
         } catch (Throwable failure) {
             error = failure.toString();
-            phase = "error";
+            synchronized (this) {
+                workerFinished = true;
+                phase = "error";
+            }
             log.error("Ошибка обработки интервью", failure);
             try {
                 session.finish(metrics(), false);
