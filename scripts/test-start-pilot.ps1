@@ -1,6 +1,6 @@
 ﻿$ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$testRoot = Join-Path ([IO.Path]::GetTempPath()) ("stt-pilot-test-" + [Guid]::NewGuid().ToString('N'))
+$testRoot = Join-Path ([IO.Path]::GetTempPath()) ("stt pilot test кириллица " + [Guid]::NewGuid().ToString('N'))
 $scriptRoot = Join-Path $testRoot 'scripts'
 New-Item -ItemType Directory -Path $scriptRoot -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'start-pilot.ps1') -Destination $scriptRoot
@@ -64,6 +64,16 @@ try {
     $after = (Get-FileHash -LiteralPath $envPath -Algorithm SHA256).Hash
     if ($before -ne $after) { throw 'An existing .env file was changed.' }
     if ($global:composeOverrideSeen) { throw 'Inherited Compose architecture overrides were not cleared on restart.' }
+
+    Remove-Item Env:WHISPER_MODEL -ErrorAction SilentlyContinue
+    Add-Content -LiteralPath $envPath -Value 'WHISPER_MODEL=C:\models\whisper'
+    $before = (Get-FileHash -LiteralPath $envPath -Algorithm SHA256).Hash
+    $global:dockerCalls.Clear()
+    $global:composeWhisperModels.Clear()
+    & $scriptPath
+    $after = (Get-FileHash -LiteralPath $envPath -Algorithm SHA256).Hash
+    if ($global:composeWhisperModels[0] -ne 'small') { throw 'A Windows WHISPER_MODEL path from .env was passed through to the Linux container.' }
+    if ($before -ne $after) { throw 'The .env file changed while resolving its Windows model path.' }
     Write-Host 'Проверка PowerShell-запуска пройдена.'
 }
 finally {

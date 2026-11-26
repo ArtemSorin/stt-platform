@@ -14,9 +14,9 @@
 
 ### Быстрый запуск
 
-Установите Docker Desktop (Windows/macOS) или Docker Engine (Linux) с Compose V2. Нужны Linux-контейнеры и доступ к интернету для первой сборки и загрузки моделей. Скрипт создаёт `.env` при первом запуске, проверяет конфигурацию, собирает образы, запускает семь контейнеров и ждёт готовности STT и `finalization-worker` (до 20 минут). Повторный запуск сохраняет секреты и данные.
+Установите Docker с Compose V2, включите Linux-контейнеры и подключите компьютер к интернету. Для первого запуска также нужны несколько гигабайт свободного места: Docker скачает образы и модели. Скрипт создаст `.env`, проверит Compose, соберёт семь контейнеров и дождётся готовности STT и `finalization-worker`. При повторном запуске секреты и данные сохраняются.
 
-На macOS и Linux выполните в терминале:
+#### macOS
 
 ```sh
 git clone -b refactor/add-fisrt-containerization https://github.com/ArtemSorin/stt-platform.git
@@ -24,15 +24,33 @@ cd stt-platform
 sh ./scripts/start-pilot.sh
 ```
 
-STT собирается для Linux `amd64` или `arm64` в зависимости от Docker Engine. На Apple Silicon используются ARM-библиотеки CPU. Не задавайте `DOCKER_DEFAULT_PLATFORM=linux/amd64` и не подключайте amd64 override на ARM-машинах: эмуляция может замедлить live-диаризацию. Производительность и захват системного звука требуют проверки на целевой машине. После сообщения «Стенд готов» откройте http://127.0.0.1:8080/.
+Для Apple Silicon используется нативный Linux `arm64`; для Mac на Intel — `amd64`. Не задавайте `DOCKER_DEFAULT_PLATFORM=linux/amd64` и не подключайте amd64 override на Apple Silicon.
 
-В Windows PowerShell 5.1 или PowerShell 7 выполните:
+#### Linux
+
+Установите Docker Engine и Compose V2, затем выполните из терминала:
+
+```sh
+git clone -b refactor/add-fisrt-containerization https://github.com/ArtemSorin/stt-platform.git
+cd stt-platform
+sh ./scripts/start-pilot.sh
+```
+
+Скрипт использует архитектуру Docker Engine (`amd64` или `arm64`). Убедитесь, что текущий пользователь может запускать `docker` без интерактивного запроса пароля.
+
+#### Windows
+
+Запустите Docker Desktop в режиме Linux-контейнеров. В Windows PowerShell 5.1 выполните:
 
 ```powershell
 git clone -b refactor/add-fisrt-containerization https://github.com/ArtemSorin/stt-platform.git
 cd stt-platform
-powershell -ExecutionPolicy Bypass -File .\scripts\start-pilot.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-pilot.ps1
 ```
+
+Если установлен PowerShell 7, можно использовать `pwsh -NoProfile -File .\scripts\start-pilot.ps1`. Если `pwsh` не найден, используйте встроенный `powershell` из примера выше.
+
+Подробности для трёх систем, проверка готовности, логи, остановка и решение частых проблем собраны в [руководстве быстрого запуска](docs/quickstart.md). После сообщения «Стенд готов» откройте http://127.0.0.1:8080/.
 
 Логи: `docker compose logs -f`; остановка: `docker compose down`. Сохраните `.env` и тома для следующего запуска. `docker compose down -v` удаляет данные интервью. Whisper и FRIDA при первом запуске загружают модели в постоянные тома. `WHISPER_MODEL` по умолчанию `small`; FRIDA использует int8 ONNX на CPU (`FRIDA_BACKEND=torch` включает PyTorch), оценку можно выключить через `JUDGE_ENABLED=false`.
 
@@ -145,6 +163,7 @@ python -m unittest discover -s analytics-service/judge -p 'test_*.py' -v
 ## Карта документации
 
 - [Архитектура и поток аудио](docs/architecture.md)
+- [Быстрый запуск: Windows, macOS, Linux](docs/quickstart.md)
 - [Модели, источники и подтверждённые снимки](docs/models.md)
 - [Настройка и запуск Windows](docs/windows-setup.md)
 - [HTTP/OpenAPI-контракты](docs/api/README.md)

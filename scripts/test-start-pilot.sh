@@ -2,8 +2,9 @@
 set -Eeuo pipefail
 
 PROJECT_ROOT="$(CDPATH= cd "$(dirname "$0")/.." && pwd)"
-TEMP_ROOT="$(mktemp -d)"
-trap 'rm -rf "$TEMP_ROOT"' EXIT
+TEMP_PARENT="$(mktemp -d)"
+TEMP_ROOT="$TEMP_PARENT/проект с пробелами"
+trap 'rm -rf "$TEMP_PARENT"' EXIT
 
 mkdir -p "$TEMP_ROOT/project/scripts" "$TEMP_ROOT/bin"
 cp "$PROJECT_ROOT/scripts/start-pilot.sh" "$TEMP_ROOT/project/scripts/start-pilot.sh"
@@ -62,5 +63,13 @@ cp .env "$TEMP_ROOT/env.expected"
 : > "$DOCKER_CALL_LOG"
 PILOT_STARTUP_TIMEOUT_SECONDS=5 sh scripts/start-pilot.sh >/dev/null
 cmp .env "$TEMP_ROOT/env.expected"
+
+printf 'WHISPER_MODEL=C:\\Users\\test\\whisper-model\n' >> .env
+cp .env "$TEMP_ROOT/env.expected"
+unset WHISPER_MODEL
+: > "$DOCKER_CALL_LOG"
+PILOT_STARTUP_TIMEOUT_SECONDS=5 sh scripts/start-pilot.sh >/dev/null
+cmp .env "$TEMP_ROOT/env.expected"
+grep -Fq 'compose-up-whisper-model=small' "$DOCKER_CALL_LOG"
 
 printf 'Проверка shell-запуска пройдена.\n'
