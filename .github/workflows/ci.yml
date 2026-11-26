@@ -64,6 +64,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+      - name: Test resumable verified model downloads
+        run: python3 scripts/test-download-verified-artifact.py
       - name: Build native Linux STT image with verified models
         run: docker build -f stt-service/Dockerfile -t stt-linux:ci .
       - name: Verify the built image architecture
