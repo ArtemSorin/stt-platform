@@ -8,6 +8,11 @@ COPY analytics-service/pom.xml analytics-service/pom.xml
 COPY stt-service/pom.xml stt-service/pom.xml
 COPY finalization-worker/pom.xml finalization-worker/pom.xml
 
+# Analytics-тестовые классы входят в зависимости STT; исходники нужны до сборки reactor.
+COPY common/src common/src
+COPY analytics-service/src analytics-service/src
+COPY stt-service/src stt-service/src
+
 RUN --mount=type=cache,target=/root/.m2 set -eu; \
     case "$TARGETARCH" in \
       amd64) sherpa_arch=x64; sherpa_sha=30c93b59381113f9c20aedbbf9fc1ad399158f6bc03dddc0f8934a6e28e069ba; sherpa_profile=sherpa-linux ;; \
@@ -22,10 +27,6 @@ RUN --mount=type=cache,target=/root/.m2 set -eu; \
       mvn -B install:install-file -Dfile=/tmp/sherpa-linux.jar -DgroupId=com.github.k2-fsa.sherpa-onnx -DartifactId="$sherpa_artifact" -Dversion=v1.13.8 -Dpackaging=jar; \
     fi; \
     mvn -B -pl stt-service -am package -DskipTests -P "$sherpa_profile"
-
-COPY common/src common/src
-COPY analytics-service/src analytics-service/src
-COPY stt-service/src stt-service/src
 
 
 FROM eclipse-temurin:17-jre AS runtime
