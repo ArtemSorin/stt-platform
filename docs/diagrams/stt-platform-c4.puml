@@ -12,7 +12,7 @@ Person(interviewer, "Интервьюер", "Проводит интервью �
 Container_Ext(browser, "Браузер", "HTML / JavaScript", "Захват эталона и PCM16; /test.html — тестовый режим без диаризации")
 
 System_Boundary(platform, "stt-platform · локальная машина") {
-    Container(stt, "STT + диаризация", "Docker Compose · Linux · Java 17 · :8080", "Vosk и Nemotron/CAM++; браузерное API. В основном режиме обязательны эталон и диаризация.")
+    Container(stt, "STT + диаризация", "Docker Compose · Linux amd64/arm64 · Java 17 · :8080", "Нативный CPU runtime NeMo и sherpa-onnx; Vosk и CAM++; браузерное API. В основном режиме обязательны эталон и диаризация.")
     Container(analytics, "Аналитика", "Spring Boot 3.3.5 · Java 17 · :8083", "Банк, live-решения, снимок интервью, очередь заданий, восстановление состояния и экспорт XLSX.")
     Container(worker, "Фоновая финализация", "Docker Compose · Java 17 · private :8090", "Арендует задание, сверяет входы, распознаёт каналы, восстанавливает ответы и повторно публикует результат.")
     Container(whisper, "Whisper helper", "Python · :9000", "Итоговое распознавание каналов faster-whisper small по заданию обработчика.")
@@ -54,6 +54,8 @@ end note
 note bottom of platform
   common — Java/Maven-библиотека 1.0.0, включается в сервисы при сборке и отдельно не запускается.
   /test.html считает микрофон речью кандидата и пропускает эталон и диаризацию.
+  Образы собираются под архитектуру Docker Engine; эмуляция amd64 на ARM не нужна.
+  S3-порт SeaweedFS доступен внутри Docker-сети и не публикуется на хосте.
 end note
 
 @enduml

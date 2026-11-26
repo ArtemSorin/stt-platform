@@ -14,7 +14,9 @@
 
 ### Быстрый запуск
 
-Для macOS и Linux установите Docker с Compose, Git, curl и OpenSSL, затем выполните в терминале:
+Установите Docker Desktop (Windows/macOS) или Docker Engine (Linux) с Compose V2. Нужны Linux-контейнеры и доступ к интернету для первой сборки и загрузки моделей. Скрипт создаёт `.env` при первом запуске, проверяет конфигурацию, собирает образы, запускает семь контейнеров и ждёт готовности STT и `finalization-worker` (до 20 минут). Повторный запуск сохраняет секреты и данные.
+
+На macOS и Linux выполните в терминале:
 
 ```sh
 git clone -b refactor/add-fisrt-containerization https://github.com/ArtemSorin/stt-platform.git
@@ -22,19 +24,19 @@ cd stt-platform
 sh ./scripts/start-pilot.sh
 ```
 
-Образ STT собирается для Linux amd64 или arm64 в зависимости от архитектуры Docker. На Apple Silicon используются ARM-библиотеки CPU; производительность и захват системного звука зависят от окружения. Первый запуск загружает модели и может занять продолжительное время. После запуска откройте http://127.0.0.1:8080/.
+STT собирается для Linux `amd64` или `arm64` в зависимости от Docker Engine. На Apple Silicon используются ARM-библиотеки CPU. Не задавайте `DOCKER_DEFAULT_PLATFORM=linux/amd64` и не подключайте amd64 override на ARM-машинах: эмуляция может замедлить live-диаризацию. Производительность и захват системного звука требуют проверки на целевой машине. После сообщения «Стенд готов» откройте http://127.0.0.1:8080/.
 
-Для Windows:
-
-Установите Git, Docker Desktop с Linux-контейнерами и PowerShell 7. В PowerShell выполните:
+В Windows PowerShell 5.1 или PowerShell 7 выполните:
 
 ```powershell
 git clone -b refactor/add-fisrt-containerization https://github.com/ArtemSorin/stt-platform.git
 cd stt-platform
-pwsh -File ./scripts/start-pilot.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\start-pilot.ps1
 ```
 
-При первом запуске загружаются модели и создаётся локальный файл `.env` с секретами. Дождитесь сборки и откройте http://127.0.0.1:8080/. Остановка — `docker compose down`. Для повторного запуска сохраните `.env` и тома Compose. Команда `docker compose down -v` удаляет данные интервью. Whisper и FRIDA запускаются отдельными контейнерами; при первом старте они скачивают модели в тома `whisper-models` и `frida-models`, поэтому запуск занимает заметно дольше. Модель Whisper задаётся `WHISPER_MODEL` (по умолчанию `small`), FRIDA на CPU использует int8 ONNX (`FRIDA_BACKEND=torch` включает PyTorch), оценку можно выключить `JUDGE_ENABLED=false`.
+Логи: `docker compose logs -f`; остановка: `docker compose down`. Сохраните `.env` и тома для следующего запуска. `docker compose down -v` удаляет данные интервью. Whisper и FRIDA при первом запуске загружают модели в постоянные тома. `WHISPER_MODEL` по умолчанию `small`; FRIDA использует int8 ONNX на CPU (`FRIDA_BACKEND=torch` включает PyTorch), оценку можно выключить через `JUDGE_ENABLED=false`.
+
+Проверьте архитектуру STT командой `docker compose exec stt-service uname -m`: на Apple Silicon ожидается `aarch64`, на Intel/AMD — `x86_64`. Если лог содержит `Очередь аудио переполнена`, live-диаризация не успела обработать поток; сначала проверьте архитектуру контейнера и `docker compose logs -f stt-service`. Простое увеличение очереди откладывает остановку, но не ускоряет inference.
 
 #### Обновление уже клонированного проекта
 
@@ -47,7 +49,7 @@ git status --short
 git diff HEAD -- compose.yaml
 git stash push -m "local Compose changes before update" -- compose.yaml &&
 git pull --ff-only &&
-unset COMPOSE_FILE DOCKER_DEFAULT_PLATFORM &&
+unset COMPOSE_FILE COMPOSE_PATH_SEPARATOR DOCKER_DEFAULT_PLATFORM &&
 git log -1 --oneline &&
 sh ./scripts/start-pilot.sh
 ```
@@ -62,9 +64,10 @@ if ($LASTEXITCODE -ne 0) { throw 'Не удалось сохранить лок�
 git pull --ff-only
 if ($LASTEXITCODE -ne 0) { throw 'Обновление не выполнено; не запускайте стенд.' }
 Remove-Item Env:COMPOSE_FILE -ErrorAction SilentlyContinue
+Remove-Item Env:COMPOSE_PATH_SEPARATOR -ErrorAction SilentlyContinue
 Remove-Item Env:DOCKER_DEFAULT_PLATFORM -ErrorAction SilentlyContinue
 git log -1 --oneline
-pwsh -File ./scripts/start-pilot.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\start-pilot.ps1
 ```
 
 Локальные правки остаются в stash. Сравните их с обновлённым `compose.yaml` через `git stash show -p` и переносите только настройки, которые по-прежнему нужны. Не возвращайте старое принудительное `linux/amd64` для Apple Silicon: новая сборка STT выбирает `linux/arm64` автоматически.
@@ -73,7 +76,7 @@ pwsh -File ./scripts/start-pilot.ps1
 
 ```mermaid
 flowchart LR
-    Browser[Браузер на Windows] -->|PCM и команды| STT[STT в Compose на Linux]
+    Browser[Браузер на Windows, macOS или Linux] -->|PCM и команды| STT[STT в Compose на Linux amd64 или arm64]
     STT -->|события и реестр| Analytics[Аналитика в Compose]
     Analytics --> DB[(PostgreSQL: версии и реестр)]
     STT -->|аудио и журналы| S3[(Приватное S3)]
@@ -88,7 +91,7 @@ flowchart LR
 
 ![C4 Container: stt-platform](docs/diagrams/stt-platform-c4.png)
 
-Диаграмма показывает контейнеры и их связи. [Исходник PlantUML](docs/diagrams/stt-platform-c4.puml) можно открыть и изменить на [plantuml.online](https://plantuml.online/); тот же PNG можно скачать отдельно для Miro: [C4-схема](docs/diagrams/stt-platform-c4.png). Точные идентификаторы и подтверждённые версии моделей приведены в [реестре моделей](docs/models.md).
+Диаграмма показывает контейнеры и их связи. S3 доступен только из сети Compose и не занимает порт на хосте. [Исходник PlantUML](docs/diagrams/stt-platform-c4.puml) можно открыть и изменить на [plantuml.online](https://plantuml.online/); PNG для Miro: [C4-схема](docs/diagrams/stt-platform-c4.png). Точные идентификаторы и подтверждённые версии моделей приведены в [реестре моделей](docs/models.md).
 
 ## Запуск из IntelliJ на Windows
 
