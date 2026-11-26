@@ -1,6 +1,5 @@
 services:
   stt-service:
-    platform: linux/amd64
     build:
       context: .
       dockerfile: stt-service/Dockerfile
@@ -52,8 +51,6 @@ services:
       AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY}
     volumes:
       - object-data:/data
-    ports:
-      - "127.0.0.1:8333:8333"
   analytics:
     build:
       context: .

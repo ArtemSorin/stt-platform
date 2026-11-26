@@ -71,6 +71,14 @@
                 <artifactId>sherpa-onnx-native-lib-linux-x64</artifactId><version>v1.13.8</version>
             </dependency></dependencies>
         </profile>
+        <profile>
+            <id>sherpa-linux-arm64</id>
+            <activation><os><name>Linux</name><arch>aarch64</arch></os></activation>
+            <dependencies><dependency>
+                <groupId>com.github.k2-fsa.sherpa-onnx</groupId>
+                <artifactId>sherpa-onnx-native-lib-linux-aarch64</artifactId><version>v1.13.8</version>
+            </dependency></dependencies>
+        </profile>
     </profiles>
 
     <repositories>

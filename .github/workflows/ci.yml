@@ -51,20 +51,23 @@ jobs:
           python scripts/test-finalization-worker.py --image finalization-worker:ci
 
   linux-stt-image:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Build Linux STT with verified models
         run: docker build -f stt-service/Dockerfile -t stt-linux:ci .
       - name: Start STT and check HTTP readiness
         run: |
-          docker run -d --name stt-ci -p 127.0.0.1:8080:8080 -e STT_BIND_ADDRESS=0.0.0.0 -e INTERVIEW_EVENTS_TOKEN=ci-test-token-0123456789abcdef0123456789 stt-linux:ci
+          docker run -d --name stt-ci -p 127.0.0.1:8080:8080 -e STT_BIND_ADDRESS=0.0.0.0 -e DIARIZATION_OUTPUT=/data/diarization -e GATEWAY_OUTPUT=/data/runs -e INTERVIEW_EVENTS_TOKEN=ci-test-token-0123456789abcdef0123456789 stt-linux:ci
           for attempt in $(seq 1 60); do
-            if curl --fail --silent http://127.0.0.1:8080/api/status; then exit 0; fi
+            if curl --fail --silent http://127.0.0.1:8080/api/status; then break; fi
             sleep 2
           done
-          docker logs stt-ci
-          exit 1
+          curl --fail --silent http://127.0.0.1:8080/api/status
+          curl --fail --silent --max-time 180 -X POST http://127.0.0.1:8080/api/enrollment/start | python -c 'import json,sys; assert json.load(sys.stdin)["phase"] == "enrolling"'
 
   archive-integration:
     runs-on: ubuntu-latest
