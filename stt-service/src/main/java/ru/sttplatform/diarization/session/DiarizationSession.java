@@ -234,7 +234,7 @@ public final class DiarizationSession {
         DiarizationAudioQueue.Admission admission = queue.offer(item);
         if (admission != DiarizationAudioQueue.Admission.ACCEPTED) {
             if (admission == DiarizationAudioQueue.Admission.OVERFLOW) {
-                error = "Очередь live-диаризации переполнена. Определение ролей остановлено; запись каналов продолжается, итоговые роли могут быть неполными.";
+                error = "Очередь live-диаризации переполнена. Запись продолжается; для ответа используется системный звук, который может содержать другие голоса.";
                 degraded = true;
                 phase = "degraded";
                 stopReason = "queue_overflow";

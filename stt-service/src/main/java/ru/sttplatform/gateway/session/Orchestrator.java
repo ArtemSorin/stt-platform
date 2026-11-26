@@ -213,6 +213,8 @@ public final class Orchestrator implements AutoCloseable {
     private volatile String candidateWarning;
     private volatile boolean transcriptFallback;
     private volatile String currentRole = "Ожидаем речь";
+    private boolean diarizationFallback;
+    private long fallbackStartSample = Long.MAX_VALUE;
     private final StringBuilder mixedTranscript = new StringBuilder();
     private volatile Map<String, Object> question, decision, refined, preview, finalReport;
     private volatile String reportTranscriptSource;
@@ -538,13 +540,29 @@ public final class Orchestrator implements AutoCloseable {
         systemFrames++;
         capturedSamples += block.length / 2;
         lastCapturedNanos = System.nanoTime();
-        if (testMode) {
+        if (testMode || diarizationFallback) {
             // В тестовом сценарии весь сигнал считается речью кандидата: референс и роли не нужны.
             observeCandidateAudio(firstSample, candidateEnabled ? block : new byte[block.length]);
             gatedSamples = firstSample + block.length / 2L;
             return;
         }
         audio.addLast(new AudioBlock(firstSample, block));
+    }
+
+    /** Продолжает оценку по системному каналу, когда live-диаризация недоступна. */
+    public synchronized void enableDiarizationFallback() {
+        if (diarizationFallback || closed || finishing) return;
+        diarizationFallback = true;
+        fallbackStartSample = audio.isEmpty() ? capturedSamples : audio.peekFirst().first();
+        candidateWarning = "Диаризация остановлена: системный звук считается ответом кандидата и может содержать другие голоса.";
+        currentRole = "Роль не подтверждена";
+        while (!audio.isEmpty()) {
+            AudioBlock block = audio.removeFirst();
+            observeCandidateAudio(block.first(), block.mixed());
+        }
+        gatedSamples = capturedSamples;
+        publishCandidateTextSnapshot();
+        logQuietly(Json.map("type", "diarization_fallback", "start_sample", fallbackStartSample));
     }
 
     /** Принимает синхронные каналы: системный — в live STT, оба — в запись для Whisper.
@@ -571,7 +589,7 @@ public final class Orchestrator implements AutoCloseable {
     public synchronized void onDiarization(List<Map<String, Object>> segments,
                                            List<Map<String, Object>> activeSegments,
                                            double audioSeconds, boolean flush) {
-        if (closed) return;
+        if (closed || diarizationFallback) return;
         for (Map<String, Object> row : segments) {
             long start = Math.round(((Number) row.get("start")).doubleValue() * RATE);
             long end = Math.round(((Number) row.get("end")).doubleValue() * RATE);
@@ -1030,7 +1048,9 @@ public final class Orchestrator implements AutoCloseable {
     /** Возвращает слова кандидата из единственной live-транскрипции с уже назначенной ролью. */
     private List<Map<String, Object>> candidateWords() {
         return currentWords().stream()
-                .filter(word -> "vosk".equals(word.get("model")) && (testMode || "Кандидат".equals(word.get("role"))))
+                .filter(word -> "vosk".equals(word.get("model")) && (testMode || "Кандидат".equals(word.get("role"))
+                        || (diarizationFallback && ((Number) word.get("start")).doubleValue() * RATE >= fallbackStartSample
+                        && "Не определено".equals(word.get("role")))))
                 .filter(word -> !separateChannels || "system".equals(word.get("source")))
                 .filter(word -> !testMode || testWordEnabled(word))
                 .filter(word -> ((Number) word.get("start")).doubleValue() * RATE >= readySample)

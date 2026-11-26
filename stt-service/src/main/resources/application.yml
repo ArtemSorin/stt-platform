@@ -32,7 +32,7 @@ diarization:
   output-dir: ${DIARIZATION_OUTPUT:./runs/diarization}
   preset: v3-streaming
   num-threads: 4
-  queue-chunks: 32
+  queue-chunks: 128
   threshold: 0.60
   settle-seconds: 0.64
 

@@ -284,6 +284,10 @@ public class SessionManager {
         if (!a.testMode) {
             try {
                 requireDiarization(a).liveAudio(pcm);
+                if ("degraded".equals(requireDiarization(a).phase())) {
+                    a.phase = "degraded";
+                    a.orchestrator.enableDiarizationFallback();
+                }
             } catch (SessionException | ApiException e) {
                 stopWithError(a, "Передача звука в диаризацию остановилась: " + e.getMessage());
                 throw new ApiException(409, a.failure);

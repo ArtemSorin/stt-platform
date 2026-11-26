@@ -125,6 +125,7 @@ class ChannelAudioTest {
         ReflectionTestUtils.setField(active, "diarization", diarization);
         ReflectionTestUtils.setField(active, "orchestrator", orchestrator);
         ReflectionTestUtils.setField(active, "phase", "degraded");
+        when(diarization.phase()).thenReturn("degraded");
         ReflectionTestUtils.setField(active, "audioMode", "channels");
         ReflectionTestUtils.setField(manager, "current", active);
 
@@ -133,6 +134,7 @@ class ChannelAudioTest {
         manager.questionAsked("session");
 
         verify(diarization).liveAudio(new byte[]{1, 2, 3, 4});
+        verify(orchestrator).enableDiarizationFallback();
         verify(orchestrator).submitChannels(0, new byte[]{1, 2, 3, 4}, new byte[]{11, 12, 13, 14});
         verify(orchestrator).questionAsked();
         verify(orchestrator, never()).audioCaptureLost(anyString());

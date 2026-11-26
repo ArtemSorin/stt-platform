@@ -253,7 +253,7 @@ function render(status) {
   } else if (phase === 'live' || phase === 'degraded') {
     enroll.disabled = true; finish.disabled = false;
     $('hint').textContent = phase === 'degraded'
-      ? 'Live-диаризация перегружена. Запись обоих каналов продолжается; live-роли и текущая оценка могут быть неполными.'
+      ? 'Диаризация перегружена. Запись продолжается; для оценки используется системный звук, который может содержать другие голоса.'
       : 'Эталон записан из звука компьютера; для live-анализа используется системный звук, оба канала записываются для итоговой транскрипции.';
   } else if (phase === 'finished' || phase === 'error') {
     enroll.disabled = false; enroll.textContent = 'Новое интервью'; finish.disabled = true;
