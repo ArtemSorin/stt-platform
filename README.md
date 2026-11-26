@@ -36,6 +36,39 @@ pwsh -File ./scripts/start-pilot.ps1
 
 При первом запуске загружаются модели и создаётся локальный файл `.env` с секретами. Дождитесь сборки и откройте http://127.0.0.1:8080/. Остановка — `docker compose down`. Для повторного запуска сохраните `.env` и тома Compose. Команда `docker compose down -v` удаляет данные интервью. Whisper и FRIDA запускаются отдельными контейнерами; при первом старте они скачивают модели в тома `whisper-models` и `frida-models`, поэтому запуск занимает заметно дольше. Модель Whisper задаётся `WHISPER_MODEL` (по умолчанию `small`), FRIDA на CPU использует int8 ONNX (`FRIDA_BACKEND=torch` включает PyTorch), оценку можно выключить `JUDGE_ENABLED=false`.
 
+#### Обновление уже клонированного проекта
+
+Если `git pull` сообщает, что локальные изменения в `compose.yaml` будут перезаписаны, обновление не произошло. Не запускайте проект до успешного обновления: следующая отдельная команда всё равно может выполниться и поднять старую ревизию. Сначала посмотрите свои изменения, сохраните их в stash, затем обновите ветку. Stash оставьте до проверки новой конфигурации.
+
+В macOS и Linux из корня проекта:
+
+```sh
+git status --short
+git diff HEAD -- compose.yaml
+git stash push -m "local Compose changes before update" -- compose.yaml &&
+git pull --ff-only &&
+unset COMPOSE_FILE DOCKER_DEFAULT_PLATFORM &&
+git log -1 --oneline &&
+sh ./scripts/start-pilot.sh
+```
+
+В PowerShell 7:
+
+```powershell
+git status --short
+git diff HEAD -- compose.yaml
+git stash push -m "local Compose changes before update" -- compose.yaml
+if ($LASTEXITCODE -ne 0) { throw 'Не удалось сохранить локальный compose.yaml.' }
+git pull --ff-only
+if ($LASTEXITCODE -ne 0) { throw 'Обновление не выполнено; не запускайте стенд.' }
+Remove-Item Env:COMPOSE_FILE -ErrorAction SilentlyContinue
+Remove-Item Env:DOCKER_DEFAULT_PLATFORM -ErrorAction SilentlyContinue
+git log -1 --oneline
+pwsh -File ./scripts/start-pilot.ps1
+```
+
+Локальные правки остаются в stash. Сравните их с обновлённым `compose.yaml` через `git stash show -p` и переносите только настройки, которые по-прежнему нужны. Не возвращайте старое принудительное `linux/amd64` для Apple Silicon: новая сборка STT выбирает `linux/arm64` автоматически.
+
 Пилотный архив: PostgreSQL, SeaweedFS, аналитика, STT, Whisper, FRIDA и обработчик работают в Compose. Версия банка привязана к интервью; WAV и результаты отправляются через постоянную очередь. После подтверждения задания вкладку можно закрыть; прежняя ссылка отдаёт запись, транскрипцию и готовый XLSX. [Запуск и ограничения архива](docs/archive-pilot.md).
 
 ```mermaid
