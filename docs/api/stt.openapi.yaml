@@ -16,6 +16,55 @@ tags:
   - name: Vosk и Whisper
     description: Потоковое распознавание и опциональный второй проход.
 paths:
+  /api/interviews/{id}:
+    get:
+      tags: [Браузерное интервью]
+      operationId: getArchivedInterview
+      summary: Получить карточку интервью из архива
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        '200':
+          description: Состояния звонка, записи и отчёта, версия банка и доступные файлы
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, catalogVersion, callStatus, audioStatus, reportStatus, artifacts]
+                properties:
+                  id: {type: string, format: uuid}
+                  catalogVersion: {type: integer}
+                  callStatus: {type: string, enum: [active, finished]}
+                  audioStatus: {type: string, enum: [pending, saved, error, unavailable]}
+                  reportStatus: {type: string, enum: [pending, processing, ready, error, unavailable]}
+                  finalizationStatus: {type: string, enum: [waiting_inputs, pending, running, retry_wait, ready, failed], description: Отсутствует у старых интервью без задания.}
+                  artifacts: {type: array, items: {type: string}}
+        '404': {description: Интервью не зарегистрировано или архив отключён}
+        '500': {description: Реестр недоступен}
+  /api/interviews/{id}/artifacts/{kind}:
+    get:
+      tags: [Браузерное интервью]
+      operationId: downloadArchivedArtifact
+      summary: Скачать зарегистрированный файл
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - name: kind
+          in: path
+          required: true
+          schema: {type: string, enum: [audio_wav, audio_mono_wav, report_xlsx, report_json, transcript_md, transcript_timed_md, transcripts_zip]}
+      responses:
+        '200':
+          description: Файл из приватного хранилища
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        '404': {description: Интервью или зарегистрированный файл не найден}
   /:
     get:
       tags: [Браузерное интервью]

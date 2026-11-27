@@ -7,6 +7,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
+import ru.sttplatform.common.archive.ArchiveQueue;
 import ru.sttplatform.common.json.Json;
 import ru.sttplatform.gateway.clients.ApiException;
 import ru.sttplatform.gateway.config.GatewayProperties;
@@ -62,6 +64,14 @@ public class SessionManager {
     private final TranscriptStore transcriptStore;
     private final IntegrationProperties integrationProps;
     private volatile Active current;
+    private ArchiveQueue archiveQueue;
+    @Value("${finalization.worker-enabled:false}")
+    private boolean backgroundFinalization;
+
+    /** Подключает очередь для пилотного архива.
+     * @param queue постоянная очередь файлов */
+    @Autowired(required = false)
+    public void setArchiveQueue(ArchiveQueue queue) { this.archiveQueue = queue; }
     // Все пользовательские интервью завершают обработку до запуска итогового распознавания.
     private final boolean deferredFinalReport = true;
 
@@ -101,6 +111,8 @@ public class SessionManager {
         } catch (Exception error) {
             throw new ApiException(503, "Не удалось загрузить модели диаризации: " + error.getMessage());
         }
+        try { bindArchive(session.id()); }
+        catch (RuntimeException error) { session.requestStop("capture_error"); session.dispose(); throw error; }
         if (previous != null) release(previous);
         Active next = new Active(session.id());
         next.diarization = session;
@@ -122,11 +134,14 @@ public class SessionManager {
             throw new ApiException(409, "Сначала завершите основное интервью.");
         if (previous != null) release(previous);
         Active test = new Active(UUID.randomUUID().toString(), true);
+        bindArchive(test.id);
         try {
             test.orchestrator = new Orchestrator(Path.of(props.outputDir()).toAbsolutePath().normalize()
                     .resolve(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + "-test-" + test.id.substring(0, 8)),
                     props.sttUrl(), props.analyticsUrl(), test.id, whisperEnabled && whisperClient.configured(),
                     integrationProps, whisperClient, true, candidate, false, Path.of(props.audioSpoolDir()), deferredFinalReport);
+            test.orchestrator.setArchiveQueue(archiveQueue);
+            test.orchestrator.setBackgroundFinalization(backgroundFinalization);
             test.phase = "live";
             current = test;
             return status(test.id);
@@ -134,6 +149,15 @@ public class SessionManager {
             release(test);
             throw new ApiException(503, "Не удалось запустить тестовый режим: " + failure.getMessage());
         }
+    }
+
+    private void bindArchive(String id) {
+        if (archiveQueue == null) return;
+        try { archiveQueue.bind(UUID.fromString(id)); }
+        catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new ApiException(503, "Регистрация интервью прервана");
+        } catch (java.io.IOException error) { throw new ApiException(503, "Реестр интервью недоступен: " + error.getMessage()); }
     }
 
     /**
@@ -184,6 +208,8 @@ public class SessionManager {
                     .resolve(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + "-" + a.id.substring(0, 8)),
                     props.sttUrl(), props.analyticsUrl(), a.id, whisperClient.configured(), integrationProps,
                     whisperClient, false, "", "channels".equals(audioMode), Path.of(props.audioSpoolDir()), deferredFinalReport);
+            a.orchestrator.setArchiveQueue(archiveQueue);
+            a.orchestrator.setBackgroundFinalization(backgroundFinalization);
             a.audioMode = audioMode;
             session.setListener(event -> onDiarizationEvent(a, Json.MAPPER.valueToTree(event)));
         } catch (RuntimeException | java.io.IOException failure) {
@@ -250,7 +276,7 @@ public class SessionManager {
     }
 
     private void acceptLive(Active a, long sequence, byte[] pcm, byte[] microphone, String audioMode, boolean candidateEnabled) {
-        if (a.orchestrator == null || (!a.testMode && a.diarization == null) || !"live".equals(a.phase) || a.finalizing)
+        if (a.orchestrator == null || (!a.testMode && a.diarization == null) || !receivingAudio(a.phase) || a.finalizing)
             throw new ApiException(409, "Анализ аудио сейчас недоступен.");
         if (!a.audioMode.equals(audioMode))
             throw new ApiException(409, "Формат аудио нельзя менять во время интервью.");
@@ -258,6 +284,10 @@ public class SessionManager {
         if (!a.testMode) {
             try {
                 requireDiarization(a).liveAudio(pcm);
+                if ("degraded".equals(requireDiarization(a).phase())) {
+                    a.phase = "degraded";
+                    a.orchestrator.enableDiarizationFallback();
+                }
             } catch (SessionException | ApiException e) {
                 stopWithError(a, "Передача звука в диаризацию остановилась: " + e.getMessage());
                 throw new ApiException(409, a.failure);
@@ -472,8 +502,10 @@ public class SessionManager {
             a.failure = "Не удалось завершить тестовое интервью: " + error;
             log.error("Завершение тестового интервью", error);
         } finally {
-            publishTranscript(a);
+            if (!a.orchestrator.finalizationQueued()) publishTranscript(a);
             a.orchestrator.close();
+            if (!a.orchestrator.finalizationQueued()) a.orchestrator.archiveReplayInputs();
+            a.orchestrator.releaseArchivedAudio();
             a.done = true;
             a.finalizing = false;
         }
@@ -504,6 +536,8 @@ public class SessionManager {
         } finally {
             publishTranscript(a);
             a.orchestrator.close();
+            a.orchestrator.archiveReplayInputs();
+            a.orchestrator.releaseArchivedAudio();
             if (a.diarization != null) a.diarization.setListener(null);
             a.done = true;
         }
@@ -518,9 +552,15 @@ public class SessionManager {
         }
         try {
             transcriptStore.publish(a.orchestrator.outputDirectory(), a.id, a.orchestrator.finalTranscriptWords());
+            if (archiveQueue != null) {
+                Path transcriptDir = a.orchestrator.outputDirectory().resolve("transcripts");
+                archiveQueue.submit(UUID.fromString(a.id), "transcript_md", transcriptDir.resolve("transcript.md"));
+                archiveQueue.submit(UUID.fromString(a.id), "transcript_timed_md", transcriptDir.resolve("transcript-timed.md"));
+                archiveQueue.submit(UUID.fromString(a.id), "transcripts_zip", transcriptDir.resolve("transcripts.zip"));
+            }
             a.transcriptReady = true;
             a.orchestrator.finishTranscriptTiming(true);
-            try { if (!a.orchestrator.transcriptFallback()) a.orchestrator.deleteAudioSpool(); }
+            try { if (archiveQueue == null && !a.orchestrator.transcriptFallback()) a.orchestrator.deleteAudioSpool(); }
             catch (Exception error) { log.warn("Не удалось удалить временную аудиозапись: {}", error.toString()); }
         } catch (Exception error) {
             a.transcriptError = "Не удалось сохранить транскрипцию: " + error.getMessage();
@@ -557,9 +597,13 @@ public class SessionManager {
 
     private Orchestrator liveOrchestrator(String token) {
         Active a = require(token);
-        if (a.orchestrator == null || !"live".equals(a.phase) || a.finalizing)
+        if (a.orchestrator == null || !receivingAudio(a.phase) || a.finalizing)
             throw new ApiException(409, "Интервью ещё не началось.");
         return a.orchestrator;
+    }
+
+    private static boolean receivingAudio(String phase) {
+        return "live".equals(phase) || "degraded".equals(phase);
     }
 
     private Active require(String token) {

@@ -2,62 +2,81 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Тест аналитики интервью</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0d0f0e">
+  <title>STT Platform — Тест аналитики</title>
   <link rel="stylesheet" href="/style.css">
-  <style>
-    body{font-family:system-ui,sans-serif;max-width:960px;margin:28px auto;padding:0 16px;color:#222}
-    .bar,.card{border:1px solid #8885;border-radius:10px;padding:14px;margin:12px 0}
-    .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-    input,select,button{font:inherit;padding:8px 10px}
-    button{cursor:pointer}button:disabled{opacity:.5;cursor:default}
-    #question{font-size:22px;line-height:1.45}#partial{min-height:36px}
-    #error{color:#a20;background:#fee;padding:10px;border-radius:8px;white-space:pre-wrap}
-    #log{font:13px ui-monospace,Consolas,monospace;max-height:240px;overflow:auto}
-    #log div{padding:4px 0;border-bottom:1px dashed #8885}
-    #report{white-space:pre-wrap;overflow-wrap:anywhere}
-    .muted{opacity:.7;font-size:13px}.hidden{display:none}
-  </style>
 </head>
 <body>
-  <h1>Тест аналитики интервью</h1>
-  <p>Упрощённый сценарий без записи эталона и диаризации. Весь звук микрофона во время ответа считается речью кандидата.</p>
-  <p><a href="/integrated.html">Перейти к основному сценарию с диаризацией</a></p>
-  <div class="bar" id="setup">
-    <input id="candidate" maxlength="60" placeholder="Имя кандидата">
-    <label><input type="checkbox" id="tts" checked> озвучивать вопросы</label>
-    <label><input type="checkbox" id="whisper" checked> создать полную транскрипцию после интервью</label>
-    <button id="start">Начать тест</button>
-  </div>
-  <div class="bar hidden" id="controls">
-    <button id="asked" class="hidden">Вопрос задан, начать ответ</button>
-    <button id="skip" disabled>Пропустить вопрос</button>
-    <button id="finish" disabled>Завершить интервью</button>
-    <span id="status">Ожидание</span>
-  </div>
-  <div id="error" class="hidden"></div>
-  <section id="interview" class="hidden">
-    <div class="card"><div id="question-meta" class="muted"></div><div id="question">Ожидание вопроса</div></div>
-    <div class="card"><strong>Распознанный ответ</strong><div id="partial">Ожидание речи</div></div>
-    <div class="card"><strong>Предварительная оценка</strong><div id="preview">Пока нет подсказок</div></div>
-    <div class="card"><strong>Решение</strong><div id="decision">Ожидание ответа</div></div>
-    <div class="card"><strong>Итоговая транскрипция</strong><div id="whisper-state">Не запущена</div></div>
-    <div class="card"><strong>События</strong><div id="log"></div></div>
+<main>
+  <header class="site-top">
+    <a class="brand" href="/integrated.html"><span class="brand-mark">STT</span> PLATFORM</a>
+    <nav class="nav-links" aria-label="Основная навигация">
+      <a href="/integrated.html">01 · Интервью</a><span class="current">02 · Тест аналитики</span>
+    </nav>
+  </header>
+  <section class="hero">
+    <div class="hero-main">
+      <p class="eyebrow" style="color:#c3d8c6">Analytics lab · simplified scenario</p>
+      <h1>Тест<br>аналитики</h1>
+      <p class="lead">Проверка вопросов, подсказок и итоговой оценки без записи эталона и разделения собеседников.</p>
+      <div class="tags"><span class="tag"><b>MICROPHONE</b><i>INPUT</i></span><span class="tag"><b>FRIDA</b><i>JUDGEMENT</i></span><span class="tag"><b>WHISPER</b><i>TRANSCRIPT</i></span></div>
+    </div>
+    <div class="hero-art" aria-hidden="true">
+      <span class="art-label">02 / Analytics mode</span>
+      <div class="signal"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="art-foot"><span>MIC INPUT</span><span>NO DIARIZATION</span></div>
+    </div>
   </section>
-<section id="transcript-result" class="card" hidden aria-live="polite">
-  <div class="role-label">Полная транскрипция</div>
-  <p id="transcript-result-state"></p>
-  <div id="transcript-actions" hidden>
-    <button id="transcript-show-timed" type="button">С таймкодами</button>
-    <button id="transcript-show-plain" type="button">Без таймкодов</button>
-    <a id="transcript-zip">Скачать транскрипцию</a>
-    <a id="transcript-link">Ссылка на эту транскрипцию</a>
-    <pre id="transcript-full" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
-  </div>
-</section>
-
-  <section id="report" class="card hidden"></section>
-  <script src="/transcript-view.js"></script>
-  <script src="/test-app.js"></script>
+  <section class="panel">
+    <h2>Настройка теста</h2>
+    <p class="intro">Упрощённый сценарий без записи эталона и диаризации. Весь звук микрофона во время ответа считается речью кандидата.</p>
+    <div class="bar" id="setup">
+      <input id="candidate" maxlength="60" placeholder="Имя кандидата" aria-label="Имя кандидата">
+      <label><input type="checkbox" id="tts" checked> озвучивать вопросы</label>
+      <label><input type="checkbox" id="whisper" checked> создать полную транскрипцию после интервью</label>
+      <button id="start" class="primary">Начать тест</button>
+    </div>
+    <div class="bar hidden" id="controls">
+      <button id="asked" class="primary hidden">Вопрос задан, начать ответ</button>
+      <button id="skip" class="secondary" disabled>Пропустить вопрос</button>
+      <button id="finish" class="secondary" disabled>Завершить интервью</button>
+      <span id="status">Ожидание</span>
+    </div>
+    <div id="error" class="hidden" role="alert"></div>
+    <section id="interview" class="hidden">
+      <div class="card"><div id="question-meta" class="muted"></div><div id="question">Ожидание вопроса</div></div>
+      <div class="card"><h3>01 · Распознанный ответ</h3><div id="partial">Ожидание речи</div></div>
+      <div class="card lav"><h3>02 · Предварительная оценка</h3><div id="preview">Пока нет подсказок</div></div>
+      <div class="card"><h3>03 · Решение аналитики</h3><div id="decision">Ожидание ответа</div></div>
+      <div class="card"><h3>04 · Итоговая транскрипция</h3><div id="whisper-state">Не запущена</div></div>
+      <div class="card"><h3>05 · События</h3><div id="log"></div></div>
+    </section>
+    <section id="transcript-result" class="card" hidden aria-live="polite">
+      <h3>Полная транскрипция</h3><p id="transcript-result-state"></p>
+      <div id="transcript-actions" hidden>
+        <button id="transcript-show-timed" type="button">С таймкодами</button><button id="transcript-show-plain" type="button">Без таймкодов</button>
+        <a id="transcript-zip">Скачать транскрипцию</a><a id="transcript-link">Ссылка на эту транскрипцию</a>
+        <pre id="transcript-full"></pre>
+      </div>
+    </section>
+    <section id="report" class="card hidden"></section>
+    <section id="archive-result" class="card" hidden aria-live="polite">
+      <h3>Архив интервью</h3>
+      <p class="hint">Версия банка: <span id="archive-version"></span>. Звонок: <span id="archive-call"></span>.</p>
+      <p class="hint">Запись: <span id="archive-audio"></span>. Отчёт: <span id="archive-report"></span>.</p>
+      <div class="buttons">
+        <a id="archive-audio-link" class="button-link" hidden>Скачать запись</a>
+        <a id="archive-report-link" class="button-link" hidden>Скачать отчёт</a>
+        <a id="archive-transcript-link" class="button-link" hidden>Скачать транскрипцию</a>
+        <a id="archive-link" class="button-link">Ссылка на интервью</a>
+      </div>
+    </section>
+    <p class="footnote">Тестовый режим предназначен для проверки аналитики. Он не проверяет качество разделения собеседников и не заменяет основной сценарий интервью.</p>
+  </section>
+</main>
+<script src="/archive-view.js"></script>
+<script src="/transcript-view.js"></script>
+<script src="/test-app.js"></script>
 </body>
 </html>

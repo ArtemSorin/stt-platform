@@ -48,16 +48,38 @@
             <version>v1.13.8</version>
         </dependency>
         <dependency>
-            <groupId>com.github.k2-fsa.sherpa-onnx</groupId>
-            <artifactId>sherpa-onnx-native-lib-win-x64</artifactId>
-            <version>v1.13.8</version>
-        </dependency>
-        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <profiles>
+        <profile>
+            <id>sherpa-windows</id>
+            <activation><os><family>Windows</family></os></activation>
+            <dependencies><dependency>
+                <groupId>com.github.k2-fsa.sherpa-onnx</groupId>
+                <artifactId>sherpa-onnx-native-lib-win-x64</artifactId><version>v1.13.8</version>
+            </dependency></dependencies>
+        </profile>
+        <profile>
+            <id>sherpa-linux</id>
+            <activation><os><name>Linux</name><arch>amd64</arch></os></activation>
+            <dependencies><dependency>
+                <groupId>com.github.k2-fsa.sherpa-onnx</groupId>
+                <artifactId>sherpa-onnx-native-lib-linux-x64</artifactId><version>v1.13.8</version>
+            </dependency></dependencies>
+        </profile>
+        <profile>
+            <id>sherpa-linux-arm64</id>
+            <activation><os><name>Linux</name><arch>aarch64</arch></os></activation>
+            <dependencies><dependency>
+                <groupId>com.github.k2-fsa.sherpa-onnx</groupId>
+                <artifactId>sherpa-onnx-native-lib-linux-aarch64</artifactId><version>v1.13.8</version>
+            </dependency></dependencies>
+        </profile>
+    </profiles>
 
     <repositories>
         <repository>
@@ -68,6 +90,15 @@
 
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <executions><execution>
+                    <id>worker-classes</id><phase>process-classes</phase>
+                    <goals><goal>jar</goal></goals>
+                    <configuration><classifier>worker-classes</classifier></configuration>
+                </execution></executions>
+            </plugin>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>

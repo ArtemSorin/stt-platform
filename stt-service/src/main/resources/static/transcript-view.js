@@ -1,7 +1,7 @@
 (() => {
   const el = id => document.getElementById(id);
   const panel = el('transcript-result'), actions = el('transcript-actions');
-  let urls, loadedKey = '', requestNumber = 0;
+  let urls, loadedKey = '', requestNumber = 0, archiveSession = '';
   async function show(kind) {
     const number = ++requestNumber;
     try {
@@ -31,7 +31,17 @@
   el('transcript-show-timed').onclick = () => show('timed');
   el('transcript-show-plain').onclick = () => show('plain');
   window.transcriptView = {
+    archiveUpdate(id, data) {
+      if (data.reportStatus === 'ready' && data.artifacts.includes('transcript_timed_md')
+          && data.artifacts.includes('transcript_md') && data.artifacts.includes('transcripts_zip')) {
+        archiveSession = id;
+        const base = '/api/interviews/' + encodeURIComponent(id) + '/artifacts/';
+        ready(id, {plain:base+'transcript_md', timed:base+'transcript_timed_md', zip:base+'transcripts_zip'});
+      }
+    },
     update(phase, value, error, id, progress) {
+      if (archiveSession && archiveSession === id && !['live','degraded','enrolling','preparing'].includes(phase)) return;
+      if (archiveSession && archiveSession !== id) archiveSession = '';
       if (value && id) ready(id, value);
       else if (error) { panel.hidden = false; actions.hidden = true; el('transcript-result-state').textContent = String(error).replace(/whisper/gi, 'итоговое распознавание'); }
       else if (phase === 'stopping') {
@@ -40,7 +50,7 @@
           ? `Обрабатываем запись: ${progress.done} из ${progress.total} каналов.`
           : 'Готовим полную транскрипцию после интервью.';
       }
-      else if (phase === 'live' || phase === 'enrolling' || phase === 'preparing') {
+      else if (phase === 'live' || phase === 'degraded' || phase === 'enrolling' || phase === 'preparing') {
         ++requestNumber; loadedKey = ''; panel.hidden = true; actions.hidden = true;
       }
     }

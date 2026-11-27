@@ -147,6 +147,38 @@ class OrchestratorPipelineTest {
     // ---------------------------------------------------------------- тесты
 
     @Test
+    void fallback_sends_unlabelled_system_speech_to_analytics() throws Exception {
+        try (var separateStt = new MiniWsServer(); var separateAnalytics = new MiniWsServer()) {
+            var frames = new CopyOnWriteArrayList<JsonNode>();
+            separateAnalytics.onText = (connection, text) -> {
+                try { frames.add(Json.tree(text)); }
+                catch (Exception error) { throw new IllegalStateException(error); }
+            };
+            try (var separate = new Orchestrator(dir.resolve("fallback"), separateStt.httpUrl(),
+                    separateAnalytics.httpUrl(), "fallback", false,
+                    new IntegrationProperties(null, null), null, false, "", true)) {
+                var analyticsPeer = separateAnalytics.awaitConnection(0, 3000);
+                analyticsPeer.sendText(Json.write(Json.map("type", "question", "sessionId", "fallback",
+                        "sequence", 1, "graceMs", 0, "text", "Вопрос", "followUp", false)));
+                assertTrue(await(() -> separate.status().get("question") != null, 3000));
+                separate.questionAsked();
+                separate.enableDiarizationFallback();
+                for (int i = 0; i < 20; i++)
+                    separate.submitChannels(i * 800L, voiced(), new byte[FRAME_BYTES]);
+                separateStt.awaitConnection(0, 3000).sendText(Json.write(Json.map(
+                        "type", "final", "text", "ответ кандидата",
+                        "words", List.of(Json.map("word", "ответ", "start", .2, "end", .3),
+                                Json.map("word", "кандидата", "start", .3, "end", .4)))));
+                assertTrue(await(() -> frames.stream().anyMatch(frame ->
+                        "frame".equals(frame.path("type").asText())
+                        && frame.path("text").asText().contains("ответ кандидата")), 3000),
+                        "распознанный системный звук должен дойти до аналитики");
+                assertTrue(String.valueOf(separate.status().get("candidate_warning")).contains("другие голоса"));
+            }
+        }
+    }
+
+    @Test
     void separate_channels_open_only_one_live_stt_connection_and_send_system_audio() throws Exception {
         try (var separateStt = new MiniWsServer(); var separateAnalytics = new MiniWsServer()) {
             try (var separate = new Orchestrator(dir.resolve("separate"), separateStt.httpUrl(),

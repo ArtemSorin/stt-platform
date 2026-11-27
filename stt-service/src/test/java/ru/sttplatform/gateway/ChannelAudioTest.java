@@ -111,6 +111,35 @@ class ChannelAudioTest {
         manager.liveAudioChannels("session", 1, pair);
         verify(orchestrator).submitChannels(2, new byte[]{1, 2, 3, 4}, new byte[]{11, 12, 13, 14});
     }
+
+    @Test
+    void degraded_diarization_keeps_dual_channel_audio_and_interview_actions_available() throws Exception {
+        var manager = new SessionManager(mock(SessionRegistry.class), new GatewayProperties(null, null, null),
+                mock(WhisperClient.class), mock(IntegrationProperties.class));
+        Class<?> activeClass = Class.forName("ru.sttplatform.gateway.session.SessionManager$Active");
+        var constructor = activeClass.getDeclaredConstructor(String.class);
+        constructor.setAccessible(true);
+        Object active = constructor.newInstance("session");
+        var diarization = mock(DiarizationSession.class);
+        var orchestrator = mock(Orchestrator.class);
+        ReflectionTestUtils.setField(active, "diarization", diarization);
+        ReflectionTestUtils.setField(active, "orchestrator", orchestrator);
+        ReflectionTestUtils.setField(active, "phase", "degraded");
+        when(diarization.phase()).thenReturn("degraded");
+        ReflectionTestUtils.setField(active, "audioMode", "channels");
+        ReflectionTestUtils.setField(manager, "current", active);
+
+        byte[] pair = {1, 2, 11, 12, 3, 4, 13, 14};
+        manager.liveAudioChannels("session", 0, pair);
+        manager.questionAsked("session");
+
+        verify(diarization).liveAudio(new byte[]{1, 2, 3, 4});
+        verify(orchestrator).enableDiarizationFallback();
+        verify(orchestrator).submitChannels(0, new byte[]{1, 2, 3, 4}, new byte[]{11, 12, 13, 14});
+        verify(orchestrator).questionAsked();
+        verify(orchestrator, never()).audioCaptureLost(anyString());
+    }
+
     @Test
     void session_manager_passes_deferred_report_setting_to_analytics(@TempDir Path root) throws Exception {
         try (var stt = new ru.sttplatform.testsupport.MiniWsServer();

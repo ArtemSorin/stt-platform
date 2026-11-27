@@ -8,7 +8,7 @@ function harness({rate = 16000, echoCancellation = true} = {}) {
   const calls = {connections: [], requests: [], stopped: [], modules: [], closed: 0};
   const nodes = new Map();
   const makeNode = () => ({textContent:'', hidden:false, disabled:false, value:'1', checked:true, children:[],
-    classList:{toggle(){}}, replaceChildren(...children){this.children = children;},
+    classList:{states:{}, toggle(name, enabled){this.states[name] = enabled;}}, replaceChildren(...children){this.children = children;},
     append(...children){this.children.push(...children);}, prepend(child){this.children.unshift(child);}, remove(){}});
   const element = id => { if (!nodes.has(id)) nodes.set(id, makeNode()); return nodes.get(id); };
   const track = (name, settings) => ({readyState:'live', getSettings:() => settings,
@@ -70,9 +70,26 @@ function harness({rate = 16000, echoCancellation = true} = {}) {
     globalThis.setSessionForTest = value => sessionId = value;
     globalThis.resetSequenceForTest = () => sequence = 0;
     globalThis.pendingForTest = () => pending;
+    globalThis.renderForTest = render;
   `, sandbox);
   return {sandbox, calls, element, video, system, mic};
 }
+
+test('готовый отчёт из архива отображается и не затирается устаревшим live состоянием', async () => {
+  const h = harness();
+  const id = 'session1';
+  h.sandbox.setSessionForTest(id);
+  h.sandbox.setModeForTest('done');
+  h.calls.responses = {['/api/interviews/' + id + '/artifacts/report_json']: {
+    report:{total:8, verdict:'Готово', questions:[]}, transcriptSource:'mixed'
+  }};
+  await h.sandbox.window.onArchiveResult(id, {reportStatus:'ready',artifacts:['report_json']});
+  assert.equal(h.element('report-total').textContent, '8 / 10');
+  assert.equal(h.element('report-body').hidden, false);
+  h.sandbox.renderForTest({session_id:id, phase:'finished', integration:{report:null,transcript_error:'старая ошибка'}});
+  assert.equal(h.element('report-total').textContent, '8 / 10');
+  assert.equal(h.element('report-body').hidden, false);
+});
 
 test('захват запрашивает AEC и подключает оба источника к контексту 16 кГц', async () => {
   const h = harness();
@@ -135,6 +152,22 @@ test('кадры эталона и пара каналов отправляют�
   assert.deepEqual(h.calls.requests.map(request => request.options.headers['X-Sequence']), ['0', '1', '0']);
   assert.ok(h.calls.requests.every(request => request.options.headers['X-Session-Id'] === 'session'));
   h.sandbox.releaseAudioForTest();
+});
+
+test('перегрузка live-диаризации оставляет интервью активным и явно показывает неполные роли', () => {
+  const h = harness();
+  h.sandbox.renderForTest({phase:'degraded', error:'Очередь live-диаризации переполнена', integration:{
+    question:{number:1, text:'Тестовый вопрос'}
+  }});
+  assert.match(h.element('phase').textContent, /live-диаризация остановлена/);
+  assert.match(h.element('error').textContent, /очередь live-диаризации переполнена/i);
+  assert.match(h.element('role').textContent, /роли временно недоступны/);
+  assert.equal(h.element('light').classList.states.active, true);
+  assert.equal(h.element('asked').disabled, false);
+  assert.equal(h.element('skip').disabled, false);
+  assert.equal(h.element('finish').disabled, false);
+  assert.equal(h.element('enroll').disabled, true);
+  assert.equal(h.calls.stopped.length, 0);
 });
 
 test('ошибка Worklet завершает интервью без ожидания ответа от остановленного процессора', async () => {

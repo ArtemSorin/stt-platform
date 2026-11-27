@@ -11,6 +11,7 @@ let voices = [], activeQuestion = null, questionBlocked = false, questionRetract
 // Поколение отсеивает запоздавшие события отменённой озвучки и предыдущего интервью.
 let ttsGeneration = 0, ttsWatchdog, questionReady = false, ttsInProgress = false, ttsManualRequired = false;
 let voiceRotationStartId = '';
+let archivedReportSession = '', archivedReport = null, archivedReportLoading = '', legacyReportSession = '';
 const questionVoiceAssignments = new Map();
 
 async function request(path, body, headers = {}) {
@@ -103,6 +104,44 @@ function renderFinalReport(report, excel, phase) {
     questionList.append(item);
   }
 }
+
+window.onArchiveResult = async (id, data) => {
+  if (data.reportStatus !== 'ready') return;
+  if (!data.artifacts.includes('report_json')) {
+    legacyReportSession = id;
+    if (archivedReportSession !== id && (mode === 'done' || !sessionId)) {
+      $('final-report').hidden = false;
+      $('report-state').textContent = 'Отчёт готов и доступен для скачивания в архиве.';
+    }
+    return;
+  }
+  if (archivedReportSession === id || archivedReportLoading === id) return;
+  archivedReportLoading = id;
+  try {
+    const response = await fetch('/api/interviews/' + encodeURIComponent(id) + '/artifacts/report_json');
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const value = await response.json();
+    if ((sessionId && sessionId !== id) || !value.report) return;
+    archivedReport = value;
+    archivedReportSession = id;
+    renderFinalReport(value.report, {url:'/api/interviews/' + encodeURIComponent(id) + '/artifacts/report_xlsx'}, 'finished');
+    showArchiveReportWarnings(value);
+  } catch (_) {
+    $('final-report').hidden = false;
+    $('report-state').textContent = 'Не удалось загрузить оценку. Скачайте отчёт из архива.';
+  } finally { if (archivedReportLoading === id) archivedReportLoading = ''; }
+};
+function showArchiveReportWarnings(value) {
+  const report = value.report;
+  $('report-counts').textContent = `${report.finishedEarly ? 'Интервью завершено досрочно' : 'Интервью завершено'} · отвечено на ${report.answeredQuestions ?? '—'} из ${report.plannedQuestions ?? '—'} вопросов.`;
+  const warnings = [];
+  if (value.transcriptSource === 'vosk_fallback') warnings.push('Итоговая оценка построена по резервной транскрипции Vosk.');
+  if (value.transcriptSource === 'mixed') warnings.push('В итоговой транскрипции есть резервные или нераспознанные участки.');
+  if (value.scoringIncomplete) warnings.push('Оценка FRIDA неполная; использованы резервные правила.');
+  if (value.transcriptIncomplete) warnings.push('В транскрипции есть спорные участки; проверьте результат.');
+  if (value.referencesMissing) warnings.push('Нет эталонов для части уточнений.');
+  if (warnings.length) $('report-counts').textContent += ' ' + warnings.join(' ');
+}
 function questionKey(q) { return [q.number, q.followUpNumber, q.text].join('|'); }
 function renderTranscript(integration) {
   const rows = integration.timeline_words || [];
@@ -134,11 +173,12 @@ function renderTranscript(integration) {
 function render(status) {
   const phase = status.phase || 'idle', integration = status.integration || {};
   $('phase').textContent = ({idle:'Ожидание', enrolling:'Запись эталона · звук компьютера', preparing:'Создаём эталон',
-    retry:'Повторите эталон', live:'Интервью · анализ идёт', stopping:'Завершаем анализ',
+    retry:'Повторите эталон', live:'Интервью · анализ идёт',
+    degraded:'Интервью · live-диаризация остановлена', stopping:'Завершаем анализ',
     finished:'Интервью завершено', error:'Ошибка обработки'})[phase] || phase;
-  $('light').classList.toggle('active', phase === 'enrolling' || phase === 'live');
-  $('role').textContent = phase === 'live' || phase === 'stopping'
-    ? integration.current_role || status.role || 'Ожидаем речь' : '—';
+  $('light').classList.toggle('active', phase === 'enrolling' || phase === 'live' || phase === 'degraded');
+  $('role').textContent = phase === 'degraded' ? 'Live-роли временно недоступны'
+    : phase === 'live' || phase === 'stopping' ? integration.current_role || status.role || 'Ожидаем речь' : '—';
   $('audio-time').textContent = `${(status.audio_seconds || 0).toFixed(1).replace('.', ',')} с`;
   $('queue').textContent = `${status.queue_depth_chunks || 0} кадров`;
   if (status.output_dir) $('output').textContent = status.output_dir;
@@ -146,8 +186,15 @@ function render(status) {
   if (integration.bridge_error) showError(integration.bridge_error);
   if (integration.candidate_warning) showError(integration.candidate_warning);
   window.transcriptView?.update(phase, integration.transcripts, integration.transcript_error, status.session_id, integration.transcript_progress);
+  window.archiveView?.update(status.session_id);
   renderTranscript(integration);
-  renderFinalReport(integration.report, integration.excel, phase);
+  const archiveValue = archivedReportSession === status.session_id ? archivedReport : null;
+  renderFinalReport(archiveValue?.report || integration.report,
+    archiveValue ? {url:'/api/interviews/' + encodeURIComponent(status.session_id) + '/artifacts/report_xlsx'} : integration.excel, phase);
+  if (!archiveValue && !integration.report && legacyReportSession === status.session_id) {
+    $('final-report').hidden = false;
+    $('report-state').textContent = 'Отчёт готов и доступен для скачивания в архиве.';
+  }
   // При каждом обновлении состояния заново собираем строку, чтобы предупреждения не накапливались.
   if (integration.report) {
     const report = integration.report;
@@ -163,6 +210,7 @@ function render(status) {
     $('report-counts').textContent += ' В транскрипции есть спорные или нераспознанные участки; проверьте результат.';
   if (integration.report && integration.report_references_missing)
     $('report-counts').textContent += ' Нет эталонов для части уточнений; их отдельная оценка недоступна.';
+  if (archiveValue) showArchiveReportWarnings(archiveValue);
 
   const question = integration.question;
   if (question) {
@@ -180,8 +228,9 @@ function render(status) {
     }
     const ttsOn = $('tts-enabled').checked && 'speechSynthesis' in window;
     $('asked').hidden = ttsOn && !ttsManualRequired;
-    $('asked').disabled = phase !== 'live' || questionBlocked || questionReady || ttsInProgress;
-    $('skip').disabled = phase !== 'live' || questionBlocked || ttsInProgress;
+    const interviewActive = phase === 'live' || phase === 'degraded';
+    $('asked').disabled = !interviewActive || questionBlocked || questionReady || ttsInProgress;
+    $('skip').disabled = !interviewActive || questionBlocked || ttsInProgress;
     if (integration.question_pending) {
       // Переход подтверждается по обработанному аудио, а не по настенным часам браузера.
       clearTimeout(questionTimer);
@@ -247,9 +296,11 @@ function render(status) {
 
   if (phase === 'retry') {
     enroll.disabled = false; enroll.textContent = 'Повторить запись голоса'; finish.disabled = true;
-  } else if (phase === 'live') {
+  } else if (phase === 'live' || phase === 'degraded') {
     enroll.disabled = true; finish.disabled = false;
-    $('hint').textContent = 'Эталон записан из звука компьютера; для live-анализа используется системный звук, оба канала записываются для итоговой транскрипции.';
+    $('hint').textContent = phase === 'degraded'
+      ? 'Диаризация перегружена. Запись продолжается; для оценки используется системный звук, который может содержать другие голоса.'
+      : 'Эталон записан из звука компьютера; для live-анализа используется системный звук, оба канала записываются для итоговой транскрипции.';
   } else if (phase === 'finished' || phase === 'error') {
     enroll.disabled = false; enroll.textContent = 'Новое интервью'; finish.disabled = true;
   }

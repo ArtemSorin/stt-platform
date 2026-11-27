@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.sttplatform.common.audio.Pcm;
+import ru.sttplatform.common.archive.ArchiveQueue;
 import ru.sttplatform.common.json.Json;
 import ru.sttplatform.common.ws.WsPeer;
 import ru.sttplatform.stt.integration.EndpointDetector;
@@ -13,6 +14,7 @@ import ru.sttplatform.stt.transcript.PostInterviewWhisper;
 import ru.sttplatform.stt.transcript.InterviewAudioSpool;
 import ru.sttplatform.stt.transcript.FinalTranscriptBuilder;
 import ru.sttplatform.stt.transcript.LiveWhisperChunks;
+import ru.sttplatform.stt.transcript.ArchiveWave;
 
 import java.io.BufferedWriter;
 import java.nio.charset.StandardCharsets;
@@ -26,6 +28,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.HashMap;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -43,6 +46,52 @@ import java.util.function.Consumer;
  */
 public final class Orchestrator implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(Orchestrator.class);
+    private ArchiveQueue archiveQueue;
+    private boolean backgroundFinalization;
+    private volatile boolean finalizationQueued;
+
+    /** Настраивает постоянную очередь архива.
+     * @param queue очередь или null, если архив отключён */
+    public void setArchiveQueue(ArchiveQueue queue) { this.archiveQueue = queue; }
+
+    /** Включает передачу закрытого интервью в постоянную очередь обработчика.
+     * @param enabled используется ли фоновая финализация */
+    public void setBackgroundFinalization(boolean enabled) { this.backgroundFinalization = enabled; }
+
+    /** @return сохранён ли пакет в локальной очереди доставки */
+    public boolean finalizationQueued() { return finalizationQueued; }
+
+    /** Ставит закрытые журналы и данные распознавания в очередь для последующего повтора. */
+    public void archiveReplayInputs() {
+        if (archiveQueue == null) return;
+        try {
+            queueReplayInputs(false);
+        } catch (Exception error) { log.error("Не удалось подготовить данные повтора для архива", error); }
+    }
+
+    private void queueReplayInputs(boolean requireJournal) throws java.io.IOException {
+        if (archiveQueue == null) throw new java.io.IOException("Очередь архива не настроена");
+        UUID id = UUID.fromString(sessionId);
+        Path input = directory.resolve("archive-inputs.json");
+        Json.MAPPER.writeValue(input.toFile(), Json.map("schemaVersion", 1, "sessionId", sessionId, "channels", separateChannels ? 2 : 1,
+                "sampleRate", RATE, "samples", capturedSamples, "testMode", testMode,
+                "words", finalWords, "roles", finalDiarizationSpans, "voskAnswerText", voskAnswerText));
+        archiveQueue.submit(id, "replay_inputs_json", input);
+        for (String name : List.of("interview-events", "stt-events", "timeline-events")) {
+            Path journalPath = directory.resolve(name + ".jsonl");
+            if (Files.isRegularFile(journalPath)) archiveQueue.submit(id, name.replace('-', '_') + "_jsonl", journalPath);
+            else if (requireJournal && name.equals("interview-events")) throw new java.io.IOException("Журнал интервью отсутствует");
+        }
+    }
+
+    /** Разрешает удалить локальный PCM и WAV после подтверждения архивации. */
+    public void releaseArchivedAudio() {
+        if (archiveQueue == null || audioSpool == null) return;
+        try {
+            archiveQueue.release(UUID.fromString(sessionId), separateChannels ? "audio_wav" : "audio_mono_wav",
+                    List.of(audioSpool.path(), directory.resolve("archive-audio.wav")));
+        } catch (Exception error) { log.warn("Исходная запись оставлена на диске: {}", error.toString()); }
+    }
     private static final int RATE = Pcm.RATE;
     private static final int HOLD_SAMPLES = RATE;
     // Длинная непрерывная речь может получить окончательную роль только после паузы.
@@ -164,6 +213,8 @@ public final class Orchestrator implements AutoCloseable {
     private volatile String candidateWarning;
     private volatile boolean transcriptFallback;
     private volatile String currentRole = "Ожидаем речь";
+    private boolean diarizationFallback;
+    private long fallbackStartSample = Long.MAX_VALUE;
     private final StringBuilder mixedTranscript = new StringBuilder();
     private volatile Map<String, Object> question, decision, refined, preview, finalReport;
     private volatile String reportTranscriptSource;
@@ -489,13 +540,29 @@ public final class Orchestrator implements AutoCloseable {
         systemFrames++;
         capturedSamples += block.length / 2;
         lastCapturedNanos = System.nanoTime();
-        if (testMode) {
+        if (testMode || diarizationFallback) {
             // В тестовом сценарии весь сигнал считается речью кандидата: референс и роли не нужны.
             observeCandidateAudio(firstSample, candidateEnabled ? block : new byte[block.length]);
             gatedSamples = firstSample + block.length / 2L;
             return;
         }
         audio.addLast(new AudioBlock(firstSample, block));
+    }
+
+    /** Продолжает оценку по системному каналу, когда live-диаризация недоступна. */
+    public synchronized void enableDiarizationFallback() {
+        if (diarizationFallback || closed || finishing) return;
+        diarizationFallback = true;
+        fallbackStartSample = audio.isEmpty() ? capturedSamples : audio.peekFirst().first();
+        candidateWarning = "Диаризация остановлена: системный звук считается ответом кандидата и может содержать другие голоса.";
+        currentRole = "Роль не подтверждена";
+        while (!audio.isEmpty()) {
+            AudioBlock block = audio.removeFirst();
+            observeCandidateAudio(block.first(), block.mixed());
+        }
+        gatedSamples = capturedSamples;
+        publishCandidateTextSnapshot();
+        logQuietly(Json.map("type", "diarization_fallback", "start_sample", fallbackStartSample));
     }
 
     /** Принимает синхронные каналы: системный — в live STT, оба — в запись для Whisper.
@@ -522,7 +589,7 @@ public final class Orchestrator implements AutoCloseable {
     public synchronized void onDiarization(List<Map<String, Object>> segments,
                                            List<Map<String, Object>> activeSegments,
                                            double audioSeconds, boolean flush) {
-        if (closed) return;
+        if (closed || diarizationFallback) return;
         for (Map<String, Object> row : segments) {
             long start = Math.round(((Number) row.get("start")).doubleValue() * RATE);
             long end = Math.round(((Number) row.get("end")).doubleValue() * RATE);
@@ -981,7 +1048,9 @@ public final class Orchestrator implements AutoCloseable {
     /** Возвращает слова кандидата из единственной live-транскрипции с уже назначенной ролью. */
     private List<Map<String, Object>> candidateWords() {
         return currentWords().stream()
-                .filter(word -> "vosk".equals(word.get("model")) && (testMode || "Кандидат".equals(word.get("role"))))
+                .filter(word -> "vosk".equals(word.get("model")) && (testMode || "Кандидат".equals(word.get("role"))
+                        || (diarizationFallback && ((Number) word.get("start")).doubleValue() * RATE >= fallbackStartSample
+                        && "Не определено".equals(word.get("role")))))
                 .filter(word -> !separateChannels || "system".equals(word.get("source")))
                 .filter(word -> !testMode || testWordEnabled(word))
                 .filter(word -> ((Number) word.get("start")).doubleValue() * RATE >= readySample)
@@ -1372,6 +1441,7 @@ public final class Orchestrator implements AutoCloseable {
                 logQuietly(Json.map("type", "bridge_error", "worker", "final_flush", "error", failure));
             }
         }
+        archiveCapturedAudio();
         try {
             signalEnd(sttQueue, sttWorker, "Vosk");
             sttWorker.join(30_000);
@@ -1426,6 +1496,31 @@ public final class Orchestrator implements AutoCloseable {
         synchronized (this) { writeSummary(reportReceived.getCount() == 0 && failure == null); }
     }
 
+    private void archiveCapturedAudio() {
+        if (archiveQueue == null) return;
+        String kind = separateChannels ? "audio_wav" : "audio_mono_wav";
+        try {
+            archiveQueue.finish(UUID.fromString(sessionId));
+            if (audioSpool == null || transcriptError != null) {
+                archiveQueue.markInvalid(UUID.fromString(sessionId), kind);
+                return;
+            }
+            audioSpool.seal(capturedSamples);
+            Path wave = directory.resolve("archive-audio.wav");
+            ArchiveWave.write(audioSpool.path(), wave, audioSpool.channels(), capturedSamples);
+            archiveQueue.submit(UUID.fromString(sessionId), kind, wave);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            transcriptError = "Архивация аудио прервана";
+            log.error(transcriptError, error);
+        } catch (Exception error) {
+            try { archiveQueue.markInvalid(UUID.fromString(sessionId), kind); }
+            catch (Exception ignored) { log.warn("Не удалось сохранить статус ошибки архива"); }
+            transcriptError = "Не удалось подготовить аудиозапись к архивации: " + error.getMessage();
+            log.error(transcriptError, error);
+        }
+    }
+
     private void finishDeferred() {
         try {
             if (failure != null) return;
@@ -1437,6 +1532,14 @@ public final class Orchestrator implements AutoCloseable {
             interviewJournal.close();
             List<FinalAnswerAssembler.Interval> intervals = new InterviewJournalReplay().read(
                     directory.resolve("interview-events.jsonl"), sessionId, capturedSamples);
+            if (backgroundFinalization) {
+                if (audioSpool == null || transcriptError != null)
+                    throw new java.io.IOException("Полная запись недоступна: " + transcriptError);
+                queueReplayInputs(true);
+                archiveQueue.enqueueFinalization(UUID.fromString(sessionId));
+                finalizationQueued = true;
+                return;
+            }
             if (audioSpool != null) {
                 try {
                     // Даже при потере канала дописываем накопленные данные для диагностики.

@@ -25,7 +25,7 @@ public record DiarizationProperties(String nemoLib, String nemoModel, String spe
     public DiarizationProperties {
         if (preset == null || preset.isBlank()) preset = "v3-streaming";
         if (numThreads == null) numThreads = 4;
-        if (queueChunks == null) queueChunks = 32;
+        if (queueChunks == null) queueChunks = 128;
         if (threshold == null) threshold = .60;
         if (settleSeconds == null) settleSeconds = .64;
         if (numThreads < 1 || queueChunks < 1 || settleSeconds < 0)

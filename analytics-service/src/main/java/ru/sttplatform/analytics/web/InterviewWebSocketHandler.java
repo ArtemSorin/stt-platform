@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
+import ru.sttplatform.analytics.archive.CatalogStore;
+import ru.sttplatform.common.archive.ArchiveQueue;
 import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -28,6 +31,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.UUID;
+import java.sql.SQLException;
+import java.nio.file.Path;
 
 /** Внутренний канал событий STT → analytics. Бинарное аудио здесь запрещено.
  * @version 1.0.0
@@ -64,6 +70,28 @@ public final class InterviewWebSocketHandler extends AbstractWebSocketHandler {
     private final FridaJudge judge;
     private final JudgeProperties judgeProps;
     private final Map<String, Active> active = new ConcurrentHashMap<>();
+    private CatalogStore catalogStore;
+    private ArchiveQueue archiveQueue;
+    private ru.sttplatform.analytics.archive.FinalizationJobStore finalizationJobs;
+    @org.springframework.beans.factory.annotation.Value("${finalization.worker-enabled:false}")
+    private boolean finalizationWorkerEnabled;
+
+    /** Подключает постоянное хранилище фоновой финализации.
+     * @param jobs хранилище заданий */
+    @Autowired(required = false)
+    public void setFinalizationJobs(ru.sttplatform.analytics.archive.FinalizationJobStore jobs) {
+        this.finalizationJobs = jobs;
+    }
+
+    /** Подключает постоянный реестр, если он настроен.
+     * @param catalogStore хранилище версий банка
+     */
+    @Autowired(required = false)
+    public void setCatalogStore(CatalogStore catalogStore) { this.catalogStore = catalogStore; }
+
+    /** @param queue постоянная очередь отчётов */
+    @Autowired(required = false)
+    public void setArchiveQueue(ArchiveQueue queue) { this.archiveQueue = queue; }
 
     /** Создаёт обработчик внутреннего потока событий STT.
      * @param knowledge банк и анализатор вопросов
@@ -187,13 +215,36 @@ public final class InterviewWebSocketHandler extends AbstractWebSocketHandler {
         config.noSpeechTimeoutMs = properties.noSpeechTimeoutMs();
         EventSpeechEngine speech = new EventSpeechEngine();
         Active[] holder = new Active[1];
-        LiveInterview live = new LiveInterview(speech, new InterviewSession(knowledge, levels, policy),
+        InterviewKnowledge sessionKnowledge = knowledge;
+        if (catalogStore != null) {
+            try { sessionKnowledge = InterviewConfig.catalogKnowledge(properties, catalogStore.bind(UUID.fromString(sessionId))); }
+            catch (SQLException error) { throw new IllegalStateException("Не удалось закрепить версию банка", error); }
+        }
+        LiveInterview live = new LiveInterview(speech, new InterviewSession(sessionKnowledge, levels, policy),
                 new EndpointDetector(config), event -> {
                     Active current = holder[0];
                     if (current != null) sendSession(ws, current, event);
                 });
         live.setJudge(judgeProps.enabled() ? judge : null, judgeProps.decisionDeadlineMs());
         live.setDeferredFinalReport(data.path("deferredFinalReport").asBoolean(false));
+        if (finalizationWorkerEnabled) {
+            if (finalizationJobs == null || catalogStore == null)
+                throw new IllegalStateException("Для фоновой финализации требуется реестр PostgreSQL");
+            if (!data.path("deferredFinalReport").asBoolean(false))
+                throw new IllegalArgumentException("Фоновая финализация требует отложенного отчёта");
+            List<String> selectedLevels = levels.stream().map(Enum::name).toList();
+            live.setSnapshotWriter(snapshot -> {
+                try {
+                    var registered = catalogStore.find(UUID.fromString(sessionId));
+                    if (registered == null) throw new IllegalStateException("Интервью отсутствует в реестре");
+                    finalizationJobs.saveSnapshot(UUID.fromString(sessionId),
+                            mapper.writeValueAsString(Map.of("schemaVersion", 1, "interviewId", sessionId,
+                                    "catalogVersion", registered.catalogVersion(), "levels", selectedLevels, "snapshot", snapshot)));
+                } catch (Exception error) {
+                    throw new IllegalStateException("Не удалось сохранить снимок интервью", error);
+                }
+            });
+        }
         live.setTiming(new LiveInterview.Timing(properties.nextExtraMs(), properties.otherNextExtraMs(),
                 properties.followUpExtraMs(), properties.graceMs()));
         boolean whisperOn = data.path("whisperEnabled").asBoolean(false);
@@ -203,7 +254,16 @@ public final class InterviewWebSocketHandler extends AbstractWebSocketHandler {
         // ready() проверяет только состояние клиента; отдельно проверяем доступность sidecar при старте.
         boolean judgeAvailable = judge.ready() && ("vllm".equals(judgeProps.protocol())
                 || !judge.serverStatus().containsKey("error"));
-        live.setExport(reports, data.path("candidate").asText(""), settings(whisperOn, testMode, judgeAvailable));
+        live.setExport(details -> {
+            var result = reports.export(details);
+            if (archiveQueue != null) {
+                archiveQueue.submit(UUID.fromString(sessionId), "report_xlsx", Path.of(result.path()));
+                archiveQueue.release(UUID.fromString(sessionId), "report_xlsx", List.of(Path.of(result.path())));
+                return new ru.sttplatform.analytics.live.ReportExporter.Result(result.fileName(), result.path(),
+                        "/api/interviews/" + sessionId + "/artifacts/report_xlsx");
+            }
+            return result;
+        }, data.path("candidate").asText(""), settings(whisperOn, testMode, judgeAvailable));
         Active session = new Active(live, speech, sessionId);
         holder[0] = session;
         active.put(ws.getId(), session);

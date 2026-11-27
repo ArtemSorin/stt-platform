@@ -10,11 +10,310 @@ servers:
     description: Локальная разработка
 security: []
 tags:
+  - name: Внутренний архив
+    description: Доступ только по внутреннему токену; API не предназначено для браузера.
   - name: Отчёты
     description: Скачивание созданных XLSX-файлов.
   - name: Диагностика FRIDA
     description: Состояние клиента модели и локальная самопроверка.
 paths:
+  /internal/archive/interviews/{id}/finalization:
+    put:
+      tags: [Внутренний архив]
+      operationId: enqueueFinalization
+      summary: Поставить задание после регистрации снимка и входных файлов
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: X-Internal-Token, in: header, required: true, schema: {type: string}}
+      responses:
+        '200': {description: Задание создано или уже существует с теми же входами}
+        '403': {description: Неверный токен}
+        '409': {description: Ожидаются завершение звонка или входные файлы}
+  /internal/finalization/claim:
+    post:
+      tags: [Внутренний архив]
+      operationId: claimFinalization
+      summary: Атомарно выдать задание с временной арендой
+      parameters:
+        - {name: X-Internal-Token, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [seconds]
+              properties: {seconds: {type: integer, minimum: 1, maximum: 3600}}
+      responses:
+        '200': {description: 'Снимок, входной и необязательный итоговый манифесты, токен и срок аренды, номер попытки'}
+        '204': {description: Очередь пуста}
+        '403': {description: Неверный токен}
+  /internal/finalization/{id}/renew:
+    post:
+      tags: [Внутренний архив]
+      operationId: renewFinalization
+      summary: Продлить действующую аренду
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: X-Internal-Token, in: header, required: true, schema: {type: string}}
+        - {name: X-Lease-Token, in: header, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [seconds]
+              properties: {seconds: {type: integer, minimum: 1, maximum: 3600}}
+      responses:
+        '200': {description: Аренда продлена}
+        '403': {description: Неверный токен}
+        '409': {description: Аренда истекла}
+  /internal/finalization/{id}/status:
+    get:
+      tags: [Внутренний архив]
+      operationId: getFinalizationStatus
+      summary: Проверить результат при потере подтверждения готовности
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: X-Internal-Token, in: header, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: Состояние задания и закреплённый манифест
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [state, resultManifest]
+                properties:
+                  state: {type: string, enum: [pending, running, retry_wait, ready, failed]}
+                  resultManifest: {type: [string, 'null'], description: Исходное JSON-представление неизменяемого манифеста}
+        '403': {description: Неверный токен}
+        '404': {description: Задание не найдено}
+  /internal/finalization/{id}/score:
+    post:
+      tags: [Внутренний архив]
+      operationId: scoreFinalization
+      summary: Восстановить состояние и сформировать XLSX по итоговым ответам
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: X-Internal-Token, in: header, required: true, schema: {type: string}}
+        - {name: X-Lease-Token, in: header, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transcriptSource, answers]
+              properties:
+                transcriptSource: {type: string, enum: [whisper, mixed, vosk, vosk_fallback]}
+                answers:
+                  type: array
+                  items:
+                    type: object
+                    required: [answerId, questionId, text, source, transcriptIncomplete]
+                    properties:
+                      answerId: {type: integer}
+                      questionId: {type: string}
+                      followUpId: {type: [string, 'null']}
+                      text: {type: string, maxLength: 12000}
+                      source: {type: string, enum: [whisper, mixed, vosk]}
+                      transcriptIncomplete: {type: boolean}
+      responses:
+        '200': {description: Байты XLSX, content: {application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: {schema: {type: string, format: binary}}}}
+        '403': {description: Неверный токен}
+        '409': {description: Аренда истекла или результат уже закреплён}
+  /internal/finalization/{id}/score-with-report:
+    post:
+      tags: [Внутренний архив]
+      operationId: scoreFinalizationWithReport
+      summary: Сформировать XLSX и структурированный отчёт в одной попытке
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: X-Internal-Token, in: header, required: true, schema: {type: string}}
+        - {name: X-Lease-Token, in: header, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transcriptSource, answers]
+              properties:
+                transcriptSource: {type: string, enum: [whisper, mixed, vosk, vosk_fallback]}
+                answers: {type: array, items: {type: object}}
+      responses:
+        '200':
+          description: XLSX в base64 и оценки для интерфейса
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [xlsx, report]
+                properties:
+                  xlsx: {type: string, contentEncoding: base64}
+                  report: {type: object}
+        '403': {description: Неверный токен}
+        '409': {description: Аренда истекла или результат уже закреплён}
+  /internal/finalization/{id}/result:
+    put:
+      tags: [Внутренний архив]
+      operationId: saveFinalizationResult
+      summary: Закрепить неизменяемый манифест результата
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: X-Internal-Token, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [leaseToken, manifest]
+              properties:
+                leaseToken: {type: string, format: uuid}
+                manifest:
+                  type: object
+                  required: [interviewId, transcriptSource, artifacts]
+                  properties:
+                    interviewId: {type: string, format: uuid}
+                    transcriptSource: {type: string, enum: [whisper, mixed, vosk, vosk_fallback]}
+                    artifacts:
+                      type: array
+                      items:
+                        type: object
+                        required: [kind, stagingKey, sizeBytes, sha256]
+                        properties:
+                          kind: {type: string}
+                          stagingKey: {type: string}
+                          sizeBytes: {type: integer, minimum: 0}
+                          sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+      responses:
+        '200': {description: Манифест закреплён}
+        '403': {description: Неверный токен}
+        '409': {description: Аренда истекла или манифест конфликтует}
+  /internal/finalization/{id}/failure:
+    post:
+      tags: [Внутренний архив]
+      operationId: failFinalization
+      summary: Запланировать повтор либо отметить окончательную ошибку
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: X-Internal-Token, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [leaseToken, errorCode]
+              properties:
+                leaseToken: {type: string, format: uuid}
+                errorCode: {type: string}
+                delaySeconds: {type: [integer, 'null'], minimum: 0, maximum: 86400}
+      responses:
+        '200': {description: Состояние обновлено}
+        '403': {description: Неверный токен}
+        '409': {description: Аренда истекла}
+  /internal/finalization/{id}/complete:
+    post:
+      tags: [Внутренний архив]
+      operationId: completeFinalization
+      summary: Отметить готовность после регистрации отчёта из манифеста
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: X-Internal-Token, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [leaseToken]
+              properties: {leaseToken: {type: string, format: uuid}}
+      responses:
+        '200': {description: Отчёт готов}
+        '403': {description: Неверный токен}
+        '409': {description: Аренда истекла либо результат не подтверждён}
+  /internal/archive/interviews/{id}:
+    get:
+      tags: [Внутренний архив]
+      operationId: internalArchiveFind
+      summary: Получить реестровую запись
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: X-Internal-Token, in: header, required: true, schema: {type: string}}
+      responses:
+        '200': {description: 'Версия банка, статус и метаданные зарегистрированных файлов'}
+        '403': {description: Неверный токен}
+        '404': {description: Интервью не найдено}
+  /internal/archive/interviews/{id}/bind:
+    put:
+      tags: [Внутренний архив]
+      operationId: internalArchiveBind
+      summary: Создать интервью с текущей версией банка или сохранить прежнюю привязку
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: X-Internal-Token, in: header, required: true, schema: {type: string}}
+      responses:
+        '200': {description: Привязка создана или существовала}
+        '403': {description: Неверный токен}
+  /internal/archive/interviews/{id}/finish:
+    put:
+      tags: [Внутренний архив]
+      operationId: internalArchiveFinish
+      summary: Зафиксировать завершение захвата
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: X-Internal-Token, in: header, required: true, schema: {type: string}}
+      responses:
+        '200': {description: Захват завершён}
+        '403': {description: Неверный токен}
+  /internal/archive/interviews/{id}/artifacts:
+    put:
+      tags: [Внутренний архив]
+      operationId: internalArchiveRegister
+      summary: Зарегистрировать проверенный объект
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: X-Internal-Token, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, objectKey, sizeBytes, sha256]
+              properties:
+                kind: {type: string}
+                objectKey: {type: string}
+                sizeBytes: {type: integer, minimum: 0}
+                sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+      responses:
+        '200': {description: Объект зарегистрирован или уже зарегистрирован с теми же метаданными}
+        '403': {description: Неверный токен}
+        '500': {description: Конфликт либо ошибка реестра}
+  /internal/archive/catalog:
+    post:
+      tags: [Внутренний архив]
+      operationId: internalArchivePublishCatalog
+      summary: Проверить и опубликовать две TSV-таблицы
+      parameters:
+        - {name: X-Internal-Token, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [questions, followups]
+              properties:
+                questions: {type: string}
+                followups: {type: string}
+      responses:
+        '200': {description: Идентификатор опубликованной версии}
+        '403': {description: Неверный токен}
   /api/reports/{name}:
     get:
       tags: [Отчёты]

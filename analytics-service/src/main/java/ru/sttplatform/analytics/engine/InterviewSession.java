@@ -380,6 +380,155 @@ public final class InterviewSession {
         }
     }
 
+    /** Координаты попытки в сохранённом состоянии интервью.
+     * @param runIndex индекс заданного вопроса
+     * @param attemptIndex индекс попытки в вопросе */
+    public record SavedAttemptRef(int runIndex, int attemptIndex) {}
+
+    /** Сохранённые данные попытки ответа.
+     * @param promptText текст заданного вопроса
+     * @param followUpIndex индекс уточнения либо -1
+     * @param text нормализованный текст
+     * @param display исходный текст
+     * @param timing временные характеристики
+     * @param answered признак принятого ответа
+     * @param rank источник текста
+     * @param action принятое действие
+     * @param reason причина действия
+     * @param answeredAt время ответа */
+    public record SavedAttempt(String promptText, int followUpIndex, String text, String display,
+                               AnswerTiming timing, boolean answered, int rank, String action,
+                               String reason, String answeredAt) {}
+
+    /** Состояние одного заданного основного вопроса.
+     * @param questionId постоянный ID вопроса
+     * @param attempts попытки в порядке задавания
+     * @param followUpAsked признаки заданных уточнений
+     * @param followUpsUsed число использованных уточнений
+     * @param lastCoverage последнее покрытие эталона */
+    public record SavedRun(String questionId, List<SavedAttempt> attempts, List<Boolean> followUpAsked,
+                           int followUpsUsed, double lastCoverage) {}
+
+    /** Снимок состояния после закрытия живого этапа.
+     * @param runs заданные вопросы и попытки
+     * @param position позиция в плане вопросов
+     * @param currentRun индекс текущего вопроса либо -1
+     * @param lastAttempt последняя принятая попытка или null
+     * @param finished завершён ли банк вопросов */
+    public record SavedState(List<SavedRun> runs, int position, int currentRun,
+                             SavedAttemptRef lastAttempt, boolean finished) {}
+
+    /** Сохраняет фактически принятые решения без повторного запуска политики переходов.
+     * @return снимок состояния для отложенной обработки */
+    public synchronized SavedState saveState() {
+        List<SavedRun> savedRuns = new ArrayList<>();
+        for (QuestionRun run : runs) {
+            List<SavedAttempt> attempts = new ArrayList<>();
+            for (Attempt attempt : run.attempts) {
+                attempts.add(new SavedAttempt(attempt.promptText, attempt.followUpIndex, attempt.text,
+                        attempt.display, attempt.timing, attempt.answered, attempt.rank, attempt.action,
+                        attempt.reason, attempt.answeredAt == null ? null : attempt.answeredAt.toString()));
+            }
+            List<Boolean> asked = new ArrayList<>();
+            for (boolean value : run.followUpAsked) asked.add(value);
+            savedRuns.add(new SavedRun(run.cq.question().stableId(), List.copyOf(attempts),
+                    List.copyOf(asked), run.followUpsUsed, run.lastCoverage));
+        }
+        return new SavedState(List.copyOf(savedRuns), pos, runs.indexOf(current),
+                lastAttempt == null ? null : saveAttemptRef(new AttemptRef(lastRun, lastAttempt)), finished);
+    }
+
+    /** Переводит ссылку на попытку в координаты снимка.
+     * @param ref ссылка из этой сессии
+     * @return координаты попытки
+     * @throws IllegalArgumentException если ссылка не принадлежит сессии */
+    public synchronized SavedAttemptRef saveAttemptRef(AttemptRef ref) {
+        if (ref == null) throw new IllegalArgumentException("Отсутствует ссылка на ответ");
+        int runIndex = runs.indexOf(ref.run);
+        int attemptIndex = runIndex < 0 ? -1 : ref.run.attempts.indexOf(ref.attempt);
+        if (attemptIndex < 0) throw new IllegalArgumentException("Ответ не принадлежит интервью");
+        return new SavedAttemptRef(runIndex, attemptIndex);
+    }
+
+    /** Восстанавливает ссылку на попытку из снимка.
+     * @param ref сохранённые координаты
+     * @return ссылка на восстановленный ответ
+     * @throws IllegalArgumentException при недопустимых координатах */
+    public synchronized AttemptRef restoreAttemptRef(SavedAttemptRef ref) {
+        if (ref == null || ref.runIndex() < 0 || ref.runIndex() >= runs.size())
+            throw new IllegalArgumentException("Неверный индекс вопроса");
+        QuestionRun run = runs.get(ref.runIndex());
+        if (ref.attemptIndex() < 0 || ref.attemptIndex() >= run.attempts.size())
+            throw new IllegalArgumentException("Неверный индекс ответа");
+        return new AttemptRef(run, run.attempts.get(ref.attemptIndex()));
+    }
+
+    /** Восстанавливает сохранённые ответы и порядок вопросов из закреплённого банка.
+     * @param state снимок закрытого живого этапа
+     * @throws IllegalArgumentException если снимок не соответствует банку */
+    public synchronized void restoreState(SavedState state) {
+        if (state == null || state.runs() == null || state.position() < -1
+                || state.position() > plan.size() || state.currentRun() < -1
+                || state.currentRun() >= state.runs().size())
+            throw new IllegalArgumentException("Некорректное состояние интервью");
+        List<QuestionRun> restored = new ArrayList<>();
+        for (int index = 0; index < state.runs().size(); index++) {
+            SavedRun saved = state.runs().get(index);
+            if (saved == null || index >= plan.size()
+                    || !plan.get(index).question().stableId().equals(saved.questionId())
+                    || saved.attempts() == null || saved.attempts().isEmpty()
+                    || saved.followUpAsked() == null
+                    || saved.followUpAsked().size() != plan.get(index).followUps().length
+                    || saved.followUpsUsed() < 0 || saved.followUpsUsed() > saved.followUpAsked().size())
+                throw new IllegalArgumentException("Снимок не соответствует версии банка");
+            QuestionRun run = new QuestionRun(plan.get(index));
+            run.attempts.clear();
+            for (SavedAttempt item : saved.attempts()) {
+                if (item == null || item.promptText() == null || item.text() == null || item.display() == null
+                        || item.timing() == null || item.followUpIndex() < -1
+                        || item.followUpIndex() >= run.followUpAsked.length)
+                    throw new IllegalArgumentException("Некорректная попытка ответа");
+                Attempt attempt = new Attempt(item.promptText());
+                attempt.followUpIndex = item.followUpIndex();
+                attempt.text = item.text();
+                attempt.display = item.display();
+                attempt.timing = item.timing();
+                attempt.answered = item.answered();
+                attempt.rank = item.rank();
+                attempt.action = item.action();
+                attempt.reason = item.reason();
+                try {
+                    attempt.answeredAt = item.answeredAt() == null ? null : java.time.Instant.parse(item.answeredAt());
+                } catch (java.time.format.DateTimeParseException error) {
+                    throw new IllegalArgumentException("Некорректное время ответа", error);
+                }
+                run.attempts.add(attempt);
+            }
+            for (int i = 0; i < run.followUpAsked.length; i++) {
+                if (saved.followUpAsked().get(i) == null) throw new IllegalArgumentException("Некорректное уточнение");
+                run.followUpAsked[i] = saved.followUpAsked().get(i);
+            }
+            run.followUpsUsed = saved.followUpsUsed();
+            run.lastCoverage = saved.lastCoverage();
+            run.recompute(analyzer);
+            restored.add(run);
+        }
+        if (state.lastAttempt() != null && (state.lastAttempt().runIndex() < 0
+                || state.lastAttempt().runIndex() >= restored.size()
+                || state.lastAttempt().attemptIndex() < 0
+                || state.lastAttempt().attemptIndex() >= restored.get(state.lastAttempt().runIndex()).attempts.size()))
+            throw new IllegalArgumentException("Некорректная последняя попытка");
+        runs.clear();
+        runs.addAll(restored);
+        pos = state.position();
+        current = state.currentRun() < 0 ? null : runs.get(state.currentRun());
+        finished = state.finished();
+        undo = null;
+        AttemptRef last = state.lastAttempt() == null ? null : restoreAttemptRef(state.lastAttempt());
+        lastRun = last == null ? null : last.run;
+        lastAttempt = last == null ? null : last.attempt;
+    }
+
     /**
      * Что отправить модели, чтобы оценить ответ на текущий вопрос (основной или уточняющий).
      *

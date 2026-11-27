@@ -1,0 +1,8 @@
+.git
+**/target
+**/.venv
+**/__pycache__
+**/runs
+**/reports
+**/models
+.env

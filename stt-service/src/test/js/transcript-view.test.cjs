@@ -50,3 +50,22 @@ test('shows a warning while allowing download of a transcript with Vosk fallback
   assert.match(element('transcript-result-state').textContent, /резервом/);
   assert.equal(element('transcript-zip').href, 'c');
 });
+
+test('архив заменяет устаревшую ошибку и показывает транскрипцию после финализации', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../../main/resources/static/transcript-view.js'), 'utf8');
+  const nodes = new Map();
+  const element = id => { if (!nodes.has(id)) nodes.set(id, {hidden:true, textContent:'', href:''}); return nodes.get(id); };
+  const window = {};
+  vm.runInNewContext(source, {window, document:{getElementById:element},
+    location:{pathname:'/integrated.html',search:''}, URLSearchParams, encodeURIComponent,
+    fetch:async () => ({ok:true,text:async () => 'готовый текст'})});
+  const id = 'abc';
+  window.transcriptView.update('finished', null, 'старая ошибка', id);
+  assert.equal(element('transcript-result-state').textContent, 'старая ошибка');
+  window.transcriptView.archiveUpdate(id, {reportStatus:'ready',artifacts:['transcript_md','transcript_timed_md','transcripts_zip']});
+  await new Promise(resolve => setImmediate(resolve));
+  window.transcriptView.update('finished', null, 'старая ошибка', id);
+  assert.equal(element('transcript-full').textContent, 'готовый текст');
+  assert.equal(element('transcript-result-state').textContent, 'Транскрипция готова.');
+  assert.equal(element('transcript-actions').hidden, false);
+});

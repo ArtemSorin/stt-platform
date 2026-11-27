@@ -3,6 +3,7 @@ package ru.sttplatform.stt.transcript;
 import org.springframework.http.HttpHeaders;
 import ru.sttplatform.gateway.session.SessionManager;
 import org.springframework.http.ResponseEntity;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
@@ -14,6 +15,8 @@ import java.nio.file.Files;
 public class TranscriptController {
     private final TranscriptStore store;
     private final SessionManager sessions;
+    @Value("${archive.enabled:false}")
+    private boolean archiveEnabled;
     /** @param store хранилище транскриптов
      * @param sessions менеджер активной сессии
      */
@@ -26,6 +29,17 @@ public class TranscriptController {
      */
     @GetMapping("/api/interviews/{id}/transcripts/{name}")
     public ResponseEntity<byte[]> get(@PathVariable String id, @PathVariable String name) throws IOException {
+        if (archiveEnabled) {
+            String kind = switch (name) {
+                case "transcript.md" -> "transcript_md";
+                case "transcript-timed.md" -> "transcript_timed_md";
+                case "transcripts.zip" -> "transcripts_zip";
+                default -> null;
+            };
+            try { java.util.UUID.fromString(id); } catch (IllegalArgumentException error) { return ResponseEntity.notFound().build(); }
+            if (kind == null) return ResponseEntity.notFound().build();
+            return ResponseEntity.status(302).header(HttpHeaders.LOCATION, "/api/interviews/" + id + "/artifacts/" + kind).build();
+        }
         if (!sessions.transcriptAccessible(id)) return ResponseEntity.notFound().build();
         var path = store.find(id, name);
         if (path == null) return ResponseEntity.notFound().build();

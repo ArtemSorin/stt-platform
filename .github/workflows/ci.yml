@@ -2,11 +2,155 @@ name: CI
 
 on:
   push:
-    branches: [master, refactor/stt-diarization-service]
+    branches: [master, refactor/stt-diarization-service, refactor/add-fisrt-containerization]
   pull_request:
     branches: [master]
 
 jobs:
+  startup-script-syntax:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check portable shell syntax
+        run: sh -n scripts/start-pilot.sh
+      - name: Check launcher test syntax
+        run: bash -n scripts/test-start-pilot.sh
+      - name: Check first and repeated startup
+        run: sh scripts/test-start-pilot.sh
+
+  finalization-worker-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build worker image
+        run: docker build -f finalization-worker/Dockerfile -t finalization-worker:ci .
+      - name: Check worker startup and restart
+        run: |
+          docker run -d --name finalization-ci -p 127.0.0.1:18090:8090 \
+            -e WORKER_ANALYTICS_URL=http://127.0.0.1:9999 \
+            -e INTERVIEW_EVENTS_TOKEN=ci-test-token-0123456789abcdef0123456789 \
+            -e ARCHIVE_S3_ENDPOINT=http://127.0.0.1:9998 -e ARCHIVE_S3_BUCKET=interviews \
+            -e ARCHIVE_S3_ACCESS_KEY=ci-test-key -e ARCHIVE_S3_SECRET_KEY=ci-test-secret \
+            -e WHISPER_URL=http://127.0.0.1:9997 finalization-worker:ci
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18090/health; then break; fi
+            sleep 2
+          done
+          curl --fail http://127.0.0.1:18090/health
+          docker restart finalization-ci
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18090/health; then exit 0; fi
+            sleep 2
+          done
+          docker logs finalization-ci
+          exit 1
+      - name: Exercise worker recovery and repeat publication
+        run: |
+          python -m pip install boto3==1.40.67
+          python scripts/test-finalization-worker.py --image finalization-worker:ci
+
+  linux-stt-image:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-latest
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test resumable verified model downloads
+        run: python3 scripts/test-download-verified-artifact.py
+      - name: Build native Linux STT image with verified models
+        run: docker build -f stt-service/Dockerfile -t stt-linux:ci .
+      - name: Verify the built image architecture
+        run: test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' stt-linux:ci)" = "linux/${{ matrix.architecture }}"
+      - name: Start STT and check HTTP readiness
+        run: |
+          docker run -d --name stt-ci -p 127.0.0.1:8080:8080 -e STT_BIND_ADDRESS=0.0.0.0 -e DIARIZATION_OUTPUT=/data/diarization -e GATEWAY_OUTPUT=/data/runs -e INTERVIEW_EVENTS_TOKEN=ci-test-token-0123456789abcdef0123456789 stt-linux:ci
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8080/api/status >/dev/null; then break; fi
+            sleep 2
+          done
+          if ! curl --fail --silent http://127.0.0.1:8080/api/status >/dev/null; then
+            docker logs stt-ci
+            exit 1
+          fi
+          if ! curl --fail --silent --show-error --max-time 180 -X POST http://127.0.0.1:8080/api/enrollment/start \
+            | python -c 'import json,sys; assert json.load(sys.stdin)["phase"] == "enrolling"'; then
+            docker logs stt-ci
+            exit 1
+          fi
+      - name: Load native diarization and Vosk runtimes
+        run: python3 scripts/smoke-native-stt.py --container stt-ci
+
+  compose-image-compatibility:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-latest
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      POSTGRES_PASSWORD: ci-postgres-password
+      S3_ACCESS_KEY: ci-s3-access
+      S3_SECRET_KEY: ci-s3-secret
+      INTERVIEW_EVENTS_TOKEN: ci-test-token-0123456789abcdef0123456789
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pull native database and object-store images
+        run: |
+          docker compose pull postgres object-store
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' postgres:17.6)" = "linux/${{ matrix.architecture }}"
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' chrislusf/seaweedfs:4.05)" = "linux/${{ matrix.architecture }}"
+      - name: Build remaining native application images
+        run: docker compose build analytics whisper frida finalization-worker
+
+  archive-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.6
+        env:
+          POSTGRES_DB: catalog_test
+          POSTGRES_USER: catalog_test
+          POSTGRES_PASSWORD: catalog_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U catalog_test -d catalog_test"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Start S3 and wait for readiness
+        run: |
+          docker run -d --name archive-s3 -p 127.0.0.1:8333:8333 -e AWS_ACCESS_KEY_ID=local-test-key -e AWS_SECRET_ACCESS_KEY=local-test-secret chrislusf/seaweedfs:4.05 mini -dir=/data
+          for attempt in $(seq 1 30); do
+            status=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8333/ || true)
+            if [ "$status" = "403" ]; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+      - name: PostgreSQL and S3 integration tests
+        env:
+          CATALOG_TEST_JDBC_URL: jdbc:postgresql://127.0.0.1:5432/catalog_test
+          CATALOG_TEST_JDBC_USER: catalog_test
+          CATALOG_TEST_JDBC_PASSWORD: catalog_test
+          ARCHIVE_TEST_S3_ENDPOINT: http://127.0.0.1:8333
+        run: mvn --batch-mode --no-transfer-progress -pl analytics-service,finalization-worker -am test -Dtest=ArchiveQueueTest,CatalogStoreTest,FinalizationJobStoreTest,FinalizationTranscriberTest -Dsurefire.failIfNoSpecifiedTests=false
+
   verify:
     runs-on: windows-latest
     steps:
@@ -29,6 +173,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Check PowerShell launcher on Windows PowerShell and PowerShell 7
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-start-pilot.ps1
+          pwsh -NoProfile -File scripts/test-start-pilot.ps1
 
       - name: Maven tests and package both services
         run: mvn --batch-mode --no-transfer-progress verify
