@@ -193,14 +193,19 @@ public final class FinalizationWorker implements ApplicationRunner, AutoCloseabl
         var decoded = new FinalizationTranscriber().transcribe(id, wave, journal,
                 Json.MAPPER.readTree(replay.toFile()), dir.resolve("audio.pcm"), whisper, allowVoskFallback);
         checkLease(leaseLost);
-        var score = requestBytes("POST", "/internal/finalization/" + id + "/score",
+        var score = requestBytes("POST", "/internal/finalization/" + id + "/score-with-report",
                 Json.write(Map.of("transcriptSource", decoded.source(), "answers", decoded.answers())), leaseToken);
         if (score.statusCode() / 100 != 2) throw new IOException("Оценка вернула HTTP " + score.statusCode());
-        Path xlsx = dir.resolve("report.xlsx"); Files.write(xlsx, score.body());
+        JsonNode scored = Json.MAPPER.readTree(score.body());
+        if (!scored.path("xlsx").isTextual() || !scored.path("report").path("report").isObject())
+            throw new IOException("Некорректный результат оценки");
+        Path xlsx = dir.resolve("report.xlsx"); Files.write(xlsx, java.util.Base64.getDecoder().decode(scored.path("xlsx").asText()));
+        Path report = dir.resolve("report.json"); Files.write(report, Json.MAPPER.writeValueAsBytes(scored.path("report")));
         Path sessionDir = dir.resolve("session"); Files.createDirectory(sessionDir);
         new TranscriptStore(new GatewayProperties(null, null, dir.toString())).publish(sessionDir, id, decoded.words());
         List<Map<String, Object>> artifacts = new ArrayList<>();
         stage(id, leaseToken, "report_xlsx", xlsx, artifacts);
+        stage(id, leaseToken, "report_json", report, artifacts);
         stage(id, leaseToken, "transcript_md", sessionDir.resolve("transcripts/transcript.md"), artifacts);
         stage(id, leaseToken, "transcript_timed_md", sessionDir.resolve("transcripts/transcript-timed.md"), artifacts);
         stage(id, leaseToken, "transcripts_zip", sessionDir.resolve("transcripts/transcripts.zip"), artifacts);

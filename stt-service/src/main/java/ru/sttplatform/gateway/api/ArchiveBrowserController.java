@@ -22,10 +22,10 @@ import java.util.UUID;
 public class ArchiveBrowserController {
     private static final Map<String, String> TYPES = Map.of(
             "audio_wav", "audio/wav", "audio_mono_wav", "audio/wav", "report_xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "transcript_md", "text/markdown", "transcript_timed_md", "text/markdown", "transcripts_zip", "application/zip");
+            "transcript_md", "text/markdown", "transcript_timed_md", "text/markdown", "transcripts_zip", "application/zip", "report_json", "application/json");
     private static final Map<String, String> NAMES = Map.of(
             "audio_wav", "interview.wav", "audio_mono_wav", "interview-mono.wav", "report_xlsx", "report.xlsx",
-            "transcript_md", "transcript.md", "transcript_timed_md", "transcript-timed.md", "transcripts_zip", "transcripts.zip");
+            "transcript_md", "transcript.md", "transcript_timed_md", "transcript-timed.md", "transcripts_zip", "transcripts.zip", "report_json", "report.json");
     private final ArchiveQueue archive;
 
     /** @param archive очередь и клиент реестра */
@@ -74,7 +74,7 @@ public class ArchiveBrowserController {
     @GetMapping("/{id}/artifacts/{kind}")
     public ResponseEntity<StreamingResponseBody> download(@PathVariable UUID id, @PathVariable String kind) throws IOException, InterruptedException {
         if (!TYPES.containsKey(kind)) return ResponseEntity.notFound().build();
-        if (java.util.Set.of("report_xlsx", "transcript_md", "transcript_timed_md", "transcripts_zip").contains(kind)) {
+        if (java.util.Set.of("report_xlsx", "report_json", "transcript_md", "transcript_timed_md", "transcripts_zip").contains(kind)) {
             var interview = archive.find(id);
             if (interview == null) return ResponseEntity.notFound().build();
             String state = interview.path("finalizationStatus").asText("");

@@ -66,6 +66,24 @@ public final class FinalizationScoringController {
     public ResponseEntity<byte[]> score(@RequestHeader("X-Internal-Token") String presented,
                                         @PathVariable UUID id, @RequestHeader("X-Lease-Token") UUID leaseToken,
                                         @RequestBody Request request) throws Exception {
+        return ResponseEntity.ok().contentType(MediaType.parseMediaType(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(build(presented, id, leaseToken, request).xlsx());
+    }
+
+    /** Строит XLSX и структурированное представление одного и того же результата. */
+    @PostMapping(value = "/{id}/score-with-report", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<Map<String, Object>> scoreWithReport(@RequestHeader("X-Internal-Token") String presented,
+                                        @PathVariable UUID id, @RequestHeader("X-Lease-Token") UUID leaseToken,
+                                        @RequestBody Request request) throws Exception {
+        var result = build(presented, id, leaseToken, request);
+        return ResponseEntity.ok(Map.of("xlsx", java.util.Base64.getEncoder().encodeToString(result.xlsx()),
+                "report", result.report()));
+    }
+
+    private record Scored(byte[] xlsx, Map<String, Object> report) {}
+
+    private Scored build(String presented, UUID id, UUID leaseToken, Request request) throws Exception {
         if (!MessageDigest.isEqual(token, presented.getBytes(StandardCharsets.UTF_8)))
             throw new ResponseStatusException(HttpStatus.FORBIDDEN);
         var lease = jobs.current(id, leaseToken);
@@ -85,9 +103,16 @@ public final class FinalizationScoringController {
         var speech = new EventSpeechEngine();
         AtomicReference<byte[]> xlsx = new AtomicReference<>();
         AtomicReference<String> error = new AtomicReference<>();
+        AtomicReference<Map<String, Object>> report = new AtomicReference<>();
         var live = new LiveInterview(speech, new InterviewSession(knowledge, levels, policy),
                 new EndpointDetector(new EndpointDetector.Config()), event -> {
                     if (event.containsKey("excelError")) error.set(String.valueOf(event.get("excelError")));
+                    if ("report".equals(event.get("type"))) {
+                        var summary = new java.util.LinkedHashMap<String, Object>();
+                        for (String key : List.of("report", "transcriptSource", "scoringIncomplete", "transcriptIncomplete", "referencesMissing"))
+                            if (event.containsKey(key)) summary.put(key, event.get(key));
+                        report.set(summary);
+                    }
                 });
         live.setJudge(judgeProperties.enabled() ? judge : null, judgeProperties.decisionDeadlineMs());
         live.setRefinementWait(properties.whisperWaitMs());
@@ -104,13 +129,12 @@ public final class FinalizationScoringController {
                         answer.source(), answer.transcriptIncomplete());
             }
             live.onStop();
-            if (error.get() != null || xlsx.get() == null)
+            if (error.get() != null || xlsx.get() == null || report.get() == null)
                 throw new IllegalStateException("Ошибка формирования XLSX: " + error.get());
             var current = jobs.current(id, leaseToken);
             if (current == null || current.resultManifest() != null)
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Аренда истекла во время оценки");
-            return ResponseEntity.ok().contentType(MediaType.parseMediaType(
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")).body(xlsx.get());
+            return new Scored(xlsx.get(), report.get());
         } finally {
             live.close();
             speech.close();

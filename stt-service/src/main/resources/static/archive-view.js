@@ -6,10 +6,15 @@
     if (!session || session === current) return;
     current = session;
     try {
-      const response = await fetch('/api/interviews/' + encodeURIComponent(session));
+      const requestedSession = session;
+      const response = await fetch('/api/interviews/' + encodeURIComponent(requestedSession));
+      if (requestedSession !== session) return;
       if (response.status === 404) { panel.hidden = true; return; }
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const data = await response.json();
+      if (requestedSession !== session) return;
+      window.transcriptView?.archiveUpdate(requestedSession, data);
+      window.onArchiveResult?.(requestedSession, data);
       panel.hidden = false;
       document.getElementById('archive-version').textContent = data.catalogVersion;
       document.getElementById('archive-call').textContent = data.callStatus === 'finished' ? 'завершён' : 'идёт';

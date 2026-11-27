@@ -133,12 +133,14 @@ class AnalyticsHandler(JsonHandler):
                 valid = self.headers.get("X-Lease-Token") == self.state.lease
             self.send(200 if valid else 409)
             return
-        if self.path == f"/internal/finalization/{INTERVIEW_ID}/score":
+        if self.path == f"/internal/finalization/{INTERVIEW_ID}/score-with-report":
             payload = json.loads(self.body())
             with self.state.lock:
                 self.state.score_answers = payload["answers"]
-            self.send(200, self.report,
-                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            import base64
+            self.json(200, {"xlsx": base64.b64encode(self.report).decode(),
+                            "report": {"report": {"total": 8, "questions": []},
+                                       "transcriptSource": "whisper"}})
             return
         if self.path == f"/internal/finalization/{INTERVIEW_ID}/complete":
             payload = json.loads(self.body())
@@ -378,8 +380,8 @@ def main() -> None:
                 assert state.failure_count == 2, f"Не ожидалось дополнительных ошибок: {state.failure_count}"
                 assert state.status_checks >= 1, "обработчик не сверил потерянное подтверждение"
                 assert state.result_manifest is not None
-                assert set(state.registered) == {"report_xlsx", "transcript_md", "transcript_timed_md", "transcripts_zip"}
-                assert state.register_counts == {"report_xlsx": 2, "transcript_md": 1,
+                assert set(state.registered) == {"report_xlsx", "report_json", "transcript_md", "transcript_timed_md", "transcripts_zip"}
+                assert state.register_counts == {"report_xlsx": 2, "report_json": 1, "transcript_md": 1,
                                                  "transcript_timed_md": 1, "transcripts_zip": 1}, state.register_counts
                 assert state.score_answers and state.score_answers[0]["text"] == "контрольный"
                 artifacts = list(state.result_manifest["artifacts"])
@@ -390,6 +392,8 @@ def main() -> None:
                 assert len(content) == artifact["sizeBytes"], artifact["kind"]
                 assert hashlib.sha256(content).hexdigest() == artifact["sha256"], artifact["kind"]
             xlsx = s3.get_object(Bucket=BUCKET, Key=f"interviews/{INTERVIEW_ID}/report_xlsx")["Body"].read()
+            report = json.loads(s3.get_object(Bucket=BUCKET, Key=f"interviews/{INTERVIEW_ID}/report_json")["Body"].read())
+            assert report["report"]["total"] == 8
             with zipfile.ZipFile(io.BytesIO(xlsx)) as workbook:
                 sheet = workbook.read("xl/worksheets/sheet1.xml").decode()
                 assert "контрольный" in sheet

@@ -75,6 +75,22 @@ function harness({rate = 16000, echoCancellation = true} = {}) {
   return {sandbox, calls, element, video, system, mic};
 }
 
+test('готовый отчёт из архива отображается и не затирается устаревшим live состоянием', async () => {
+  const h = harness();
+  const id = 'session1';
+  h.sandbox.setSessionForTest(id);
+  h.sandbox.setModeForTest('done');
+  h.calls.responses = {['/api/interviews/' + id + '/artifacts/report_json']: {
+    report:{total:8, verdict:'Готово', questions:[]}, transcriptSource:'mixed'
+  }};
+  await h.sandbox.window.onArchiveResult(id, {reportStatus:'ready',artifacts:['report_json']});
+  assert.equal(h.element('report-total').textContent, '8 / 10');
+  assert.equal(h.element('report-body').hidden, false);
+  h.sandbox.renderForTest({session_id:id, phase:'finished', integration:{report:null,transcript_error:'старая ошибка'}});
+  assert.equal(h.element('report-total').textContent, '8 / 10');
+  assert.equal(h.element('report-body').hidden, false);
+});
+
 test('захват запрашивает AEC и подключает оба источника к контексту 16 кГц', async () => {
   const h = harness();
   await h.sandbox.prepareAudioForTest();

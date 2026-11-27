@@ -71,6 +71,9 @@ def main():
             if args.restart_worker and not restarted:
                 raise RuntimeError("Обработка завершилась до проверки перезапуска")
             report = request("/api/interviews/" + session + "/artifacts/report_xlsx")
+            summary = request("/api/interviews/" + session + "/artifacts/report_json")
+            if not isinstance(summary, dict) or not isinstance(summary.get("report"), dict):
+                raise RuntimeError("Нет структурированного отчёта для интерфейса")
             transcript = request("/api/interviews/" + session + "/artifacts/transcript_md").decode("utf-8")
             with zipfile.ZipFile(io.BytesIO(report)) as document:
                 if not any(name.startswith("xl/worksheets/") for name in document.namelist()):

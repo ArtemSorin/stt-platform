@@ -57,7 +57,7 @@ paths:
         - name: kind
           in: path
           required: true
-          schema: {type: string, enum: [audio_wav, audio_mono_wav, report_xlsx, transcript_md, transcript_timed_md, transcripts_zip]}
+          schema: {type: string, enum: [audio_wav, audio_mono_wav, report_xlsx, report_json, transcript_md, transcript_timed_md, transcripts_zip]}
       responses:
         '200':
           description: Файл из приватного хранилища

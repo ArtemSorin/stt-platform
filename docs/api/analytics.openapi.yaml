@@ -124,6 +124,38 @@ paths:
         '200': {description: Байты XLSX, content: {application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: {schema: {type: string, format: binary}}}}
         '403': {description: Неверный токен}
         '409': {description: Аренда истекла или результат уже закреплён}
+  /internal/finalization/{id}/score-with-report:
+    post:
+      tags: [Внутренний архив]
+      operationId: scoreFinalizationWithReport
+      summary: Сформировать XLSX и структурированный отчёт в одной попытке
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: X-Internal-Token, in: header, required: true, schema: {type: string}}
+        - {name: X-Lease-Token, in: header, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transcriptSource, answers]
+              properties:
+                transcriptSource: {type: string, enum: [whisper, mixed, vosk, vosk_fallback]}
+                answers: {type: array, items: {type: object}}
+      responses:
+        '200':
+          description: XLSX в base64 и оценки для интерфейса
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [xlsx, report]
+                properties:
+                  xlsx: {type: string, contentEncoding: base64}
+                  report: {type: object}
+        '403': {description: Неверный токен}
+        '409': {description: Аренда истекла или результат уже закреплён}
   /internal/finalization/{id}/result:
     put:
       tags: [Внутренний архив]

@@ -255,7 +255,7 @@ public final class CatalogStore {
                         WHERE NOT artifact.deleting
                           AND ((artifact.kind IN ('audio_wav','audio_mono_wav') AND ? > 0
                                   AND artifact.created_at < CURRENT_TIMESTAMP - (? * INTERVAL '1 day'))
-                            OR (artifact.kind='report_xlsx' AND ? > 0
+                            OR (artifact.kind IN ('report_xlsx','report_json') AND ? > 0
                                   AND artifact.created_at < CURRENT_TIMESTAMP - (? * INTERVAL '1 day')))
                           AND NOT EXISTS (
                               SELECT 1 FROM finalization_snapshot snapshot
